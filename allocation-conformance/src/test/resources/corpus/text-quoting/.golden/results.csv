@@ -1,0 +1,5 @@
+﻿terminal_stage,row_id,period,plant,sku,account,currency,amount
+st1,6b69a05fbd5321e561044892,2026-01,P0,"a,b",Cost-A,CUR,33.34
+st1,9596f417fa0cb9db64fc592f,2026-01,P0,"line
+break",Cost-A,CUR,33.33
+st1,1ee2e01607eb02cd133121f7,2026-01,P0,"q""q",Cost-A,CUR,33.33

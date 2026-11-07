@@ -1,0 +1,5 @@
+﻿stage,pool,upstream_row_id,input_amount
+skip,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""1"",1]",1000.00
+skip,"[""2026-01"",""P1"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""2"",2]",250.00
+skip,"[""2026-02"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""3"",3]",75.50
+skip,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""other"",""1"",1]",10.00

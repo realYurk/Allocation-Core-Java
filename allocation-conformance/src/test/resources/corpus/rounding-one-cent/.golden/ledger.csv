@@ -1,0 +1,2 @@
+﻿stage,rule,pool,target,target_row_id,pool_amount,share_amount,driver_weight,driver_denominator,allocated_amount
+st1,r1,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""2026-01"",""P0"",""S0"",""Cost-A"",""CUR""]",162d2f8d77a13fa0a5dee859,0.01,0.01,1.000000,3.000000,0.01

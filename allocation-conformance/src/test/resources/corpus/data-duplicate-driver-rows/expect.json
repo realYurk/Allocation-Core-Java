@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "duplicate driver rows are summed (S0 gets weight 3 of 5)"
+}

@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "hierarchy 'sellable' expands to S0,S1; S2 and S3 are excluded"
+}

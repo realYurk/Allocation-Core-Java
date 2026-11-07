@@ -1,0 +1,13 @@
+﻿terminal_stage,row_id,period,plant,sku,account,currency,amount
+share-a,706f332a05b38de7d8267602,2026-01,P0,S0,Cost-A,CUR,90.00
+share-a,ea05779a53211697be5a0206,2026-01,P0,S1,Cost-A,CUR,210.00
+share-a,fee82dbc5cb49d7870f6fde8,2026-01,P1,S0,Cost-A,CUR,18.75
+share-a,14b5be469ad232cd967d9625,2026-01,P1,S1,Cost-A,CUR,56.25
+share-a,c0aedb857cea2da386cdf6a5,2026-02,P0,S0,Cost-A,CUR,11.33
+share-a,3b88d7ce6e9b0073e26d2985,2026-02,P0,S1,Cost-A,CUR,11.32
+share-b,4cdd541fd5245552543d06e8,2026-01,P0,S0,Cost-A,CUR,210.00
+share-b,c40ad6f66cc67c508c4209c7,2026-01,P0,S1,Cost-A,CUR,490.00
+share-b,f54675efc9531e70576a3cf4,2026-01,P1,S0,Cost-A,CUR,43.75
+share-b,fcf3a1005f445c8878d00e5b,2026-01,P1,S1,Cost-A,CUR,131.25
+share-b,55a0fc991bb9af86254ac878,2026-02,P0,S0,Cost-A,CUR,26.43
+share-b,c75231566ab0fade97d7e810,2026-02,P0,S1,Cost-A,CUR,26.42

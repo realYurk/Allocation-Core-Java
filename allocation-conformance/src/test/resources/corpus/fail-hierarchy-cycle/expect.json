@@ -1,0 +1,4 @@
+{
+  "status": "FAIL",
+  "note": "a cyclic hierarchy must fail instead of looping forever"
+}

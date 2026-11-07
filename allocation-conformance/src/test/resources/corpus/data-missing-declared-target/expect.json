@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "S2 is declared but has no weight: it silently disappears, and Java raises a warning"
+}

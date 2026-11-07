@@ -1,0 +1,5 @@
+﻿terminal_stage,row_id,period,plant,sku,account,currency,amount
+off,"[""amounts"",""1"",1]",2026-01,P0,Unassigned,Cost-A,CUR,1000.00
+off,"[""amounts"",""2"",2]",2026-01,P1,Unassigned,Cost-A,CUR,250.00
+off,"[""amounts"",""3"",3]",2026-02,P0,Unassigned,Cost-A,CUR,75.50
+off,"[""other"",""1"",1]",2026-01,P0,Unassigned,Cost-A,CUR,10.00

@@ -1,0 +1,4 @@
+{
+  "status": "FAIL",
+  "note": "three decimals at precision 2 is rejected, never rounded"
+}

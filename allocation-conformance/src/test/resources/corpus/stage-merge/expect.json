@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "MERGE coalesces duplicate coordinates and records lineage"
+}

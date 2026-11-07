@@ -1,0 +1,4 @@
+{
+  "status": "FAIL",
+  "note": "an amount outside int64 is rejected, not truncated"
+}

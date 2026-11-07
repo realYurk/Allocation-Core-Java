@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "two rules share the pool 40/60 and each splits with the same weights"
+}

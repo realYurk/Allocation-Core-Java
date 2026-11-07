@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "precision 6 must round-trip without drift"
+}

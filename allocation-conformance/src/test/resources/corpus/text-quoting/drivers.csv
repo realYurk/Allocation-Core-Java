@@ -1,0 +1,5 @@
+period,plant,sku,weight
+2026-01,P0,"a,b",1
+2026-01,P0,"q""q",1
+2026-01,P0,"line
+break",1

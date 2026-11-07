@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "a disabled stage behaves as PASS but still records membership"
+}

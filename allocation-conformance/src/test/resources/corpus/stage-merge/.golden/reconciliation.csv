@@ -1,0 +1,4 @@
+﻿stage,pool,input_amount,output_amount,delta,status
+fold,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]",1010.00,1010.00,0.00,PASS
+fold,"[""2026-01"",""P1"",""__POOL__"",""Cost-A"",""CUR""]",250.00,250.00,0.00,PASS
+fold,"[""2026-02"",""P0"",""__POOL__"",""Cost-A"",""CUR""]",75.50,75.50,0.00,PASS

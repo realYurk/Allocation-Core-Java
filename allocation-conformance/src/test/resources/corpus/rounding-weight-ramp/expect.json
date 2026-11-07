@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "seven targets with weights 1..7: residual ranks by remainder then identity"
+}

@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "one source feeds two stages 30/70; both stages must stay conserved"
+}

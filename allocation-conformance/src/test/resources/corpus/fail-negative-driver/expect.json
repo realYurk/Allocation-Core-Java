@@ -1,0 +1,4 @@
+{
+  "status": "FAIL",
+  "note": "a negative weight without ALLOW_SIGNED is rejected"
+}

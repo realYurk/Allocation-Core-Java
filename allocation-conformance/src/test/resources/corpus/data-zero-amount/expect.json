@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "a zero amount contributes nothing and produces no output row"
+}

@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "members containing comma, quote and newline must round-trip through CSV"
+}

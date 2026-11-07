@@ -1,0 +1,83 @@
+{
+  "schema": "allocation-ir/2.0",
+  "rounding_policy": "LARGEST_REMAINDER_IDENTITY",
+  "name": "corpus scenario",
+  "precision": 2,
+  "dimensions": [
+    "期间",
+    "工厂",
+    "产品",
+    "科目",
+    "币种"
+  ],
+  "immutable_dimensions": [
+    "期间",
+    "币种"
+  ],
+  "hierarchies": {},
+  "datasets": {
+    "amounts": {
+      "amounts": "amounts.csv"
+    },
+    "drivers": {
+      "drivers": "drivers.csv"
+    }
+  },
+  "stages": [
+    {
+      "id": "分摊",
+      "inputs": [
+        {
+          "from": "amounts",
+          "share": "1"
+        }
+      ],
+      "source": {
+        "grouping": {
+          "期间": "AS_IS",
+          "工厂": "AS_IS",
+          "产品": "TOTAL",
+          "科目": "AS_IS",
+          "币种": "AS_IS"
+        },
+        "filters": {}
+      },
+      "target": {
+        "期间": {
+          "mode": "SOURCE"
+        },
+        "工厂": {
+          "mode": "SOURCE"
+        },
+        "产品": {
+          "mode": "INCLUDE",
+          "include": [
+            "甲",
+            "乙",
+            "丙"
+          ]
+        },
+        "科目": {
+          "mode": "SOURCE"
+        },
+        "币种": {
+          "mode": "SOURCE"
+        }
+      },
+      "conservation_keys": [
+        "期间",
+        "工厂",
+        "科目",
+        "币种"
+      ],
+      "allocations": [
+        {
+          "id": "规则",
+          "share": "1",
+          "driver_dataset": "drivers",
+          "weight_field": "权重"
+        }
+      ]
+    }
+  ]
+}

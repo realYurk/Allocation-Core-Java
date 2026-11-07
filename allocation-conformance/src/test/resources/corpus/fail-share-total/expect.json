@@ -1,0 +1,4 @@
+{
+  "status": "FAIL",
+  "note": "allocation shares must sum to exactly 1"
+}

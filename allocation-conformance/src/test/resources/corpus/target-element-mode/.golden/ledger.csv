@@ -1,0 +1,3 @@
+﻿stage,rule,pool,target,target_row_id,pool_amount,share_amount,driver_weight,driver_denominator,allocated_amount
+st1,r1,"[""2026-01"",""P0"",""__POOL__"",""__POOL__"",""CUR""]","[""2026-01"",""P0"",""S0"",""Pooled"",""CUR""]",f1769809334d4a5b19b3e021,150.00,150.00,1.000000,2.000000,75.00
+st1,r1,"[""2026-01"",""P0"",""__POOL__"",""__POOL__"",""CUR""]","[""2026-01"",""P0"",""S1"",""Pooled"",""CUR""]",72390b8db7bd1db1c9c9132d,150.00,150.00,1.000000,2.000000,75.00

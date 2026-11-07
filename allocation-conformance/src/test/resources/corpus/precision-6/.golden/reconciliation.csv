@@ -1,0 +1,2 @@
+﻿stage,pool,input_amount,output_amount,delta,status
+st1,"[""2026-01"",""__POOL__""]",100.000001,100.000001,0.000000,PASS

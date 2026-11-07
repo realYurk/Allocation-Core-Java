@@ -1,0 +1,7 @@
+﻿stage,pool,upstream_row_id,input_amount
+share-a,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""1"",1]",300.00
+share-a,"[""2026-01"",""P1"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""2"",2]",75.00
+share-a,"[""2026-02"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""3"",3]",22.65
+share-b,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""1"",1]",700.00
+share-b,"[""2026-01"",""P1"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""2"",2]",175.00
+share-b,"[""2026-02"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""amounts"",""3"",3]",52.85

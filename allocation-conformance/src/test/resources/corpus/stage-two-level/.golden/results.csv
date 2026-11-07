@@ -1,0 +1,13 @@
+﻿terminal_stage,row_id,period,plant,sku,account,currency,amount
+by-account,57e2328f8b33bb874adec09f,2026-01,P0,S0,Cost-A,CUR,150.00
+by-account,12b33ffa809b61c909e336f1,2026-01,P0,S0,Cost-B,CUR,150.00
+by-account,ae02c43e223f58b166b10eef,2026-01,P0,S1,Cost-A,CUR,350.00
+by-account,4aea9f9a12e4969116833b9d,2026-01,P0,S1,Cost-B,CUR,350.00
+by-account,00fd5158ecbb864a0e5e0704,2026-01,P1,S0,Cost-A,CUR,31.25
+by-account,0e0d52c350c7d8e07a705641,2026-01,P1,S0,Cost-B,CUR,31.25
+by-account,607585b0fda697dca0a0fd92,2026-01,P1,S1,Cost-A,CUR,93.75
+by-account,7abf221ccbb7b1c39d9906eb,2026-01,P1,S1,Cost-B,CUR,93.75
+by-account,6ea79b2619dc14a2cd98996d,2026-02,P0,S0,Cost-A,CUR,18.88
+by-account,f112253a5072855b886b9ab1,2026-02,P0,S0,Cost-B,CUR,18.87
+by-account,40b575cc546769ba3a8f9f8c,2026-02,P0,S1,Cost-A,CUR,18.88
+by-account,824682bb6550ce9ae7bb2d39,2026-02,P0,S1,Cost-B,CUR,18.87

@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "negative totals must mirror positive ones, not round the other way"
+}

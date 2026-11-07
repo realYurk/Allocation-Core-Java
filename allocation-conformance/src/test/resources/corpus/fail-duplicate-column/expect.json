@@ -1,0 +1,4 @@
+{
+  "status": "FAIL",
+  "note": "a duplicated column name makes the amount column ambiguous"
+}

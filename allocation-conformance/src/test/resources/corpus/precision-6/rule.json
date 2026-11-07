@@ -1,0 +1,64 @@
+{
+  "schema": "allocation-ir/2.0",
+  "rounding_policy": "LARGEST_REMAINDER_IDENTITY",
+  "name": "corpus scenario",
+  "precision": 6,
+  "dimensions": [
+    "period",
+    "sku"
+  ],
+  "immutable_dimensions": [
+    "period"
+  ],
+  "hierarchies": {},
+  "datasets": {
+    "amounts": {
+      "amounts": "amounts.csv"
+    },
+    "drivers": {
+      "drivers": "drivers.csv"
+    }
+  },
+  "stages": [
+    {
+      "id": "st1",
+      "inputs": [
+        {
+          "from": "amounts",
+          "share": "1"
+        }
+      ],
+      "source": {
+        "grouping": {
+          "period": "AS_IS",
+          "sku": "TOTAL"
+        },
+        "filters": {}
+      },
+      "target": {
+        "period": {
+          "mode": "SOURCE"
+        },
+        "sku": {
+          "mode": "INCLUDE",
+          "include": [
+            "S0",
+            "S1",
+            "S2"
+          ]
+        }
+      },
+      "conservation_keys": [
+        "period"
+      ],
+      "allocations": [
+        {
+          "id": "r1",
+          "share": "1",
+          "driver_dataset": "drivers",
+          "weight_field": "weight"
+        }
+      ]
+    }
+  ]
+}

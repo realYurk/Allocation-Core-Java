@@ -1,0 +1,7 @@
+﻿stage,pool,input_amount,output_amount,delta,status
+share-a,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]",300.00,300.00,0.00,PASS
+share-a,"[""2026-01"",""P1"",""__POOL__"",""Cost-A"",""CUR""]",75.00,75.00,0.00,PASS
+share-a,"[""2026-02"",""P0"",""__POOL__"",""Cost-A"",""CUR""]",22.65,22.65,0.00,PASS
+share-b,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]",700.00,700.00,0.00,PASS
+share-b,"[""2026-01"",""P1"",""__POOL__"",""Cost-A"",""CUR""]",175.00,175.00,0.00,PASS
+share-b,"[""2026-02"",""P0"",""__POOL__"",""Cost-A"",""CUR""]",52.85,52.85,0.00,PASS

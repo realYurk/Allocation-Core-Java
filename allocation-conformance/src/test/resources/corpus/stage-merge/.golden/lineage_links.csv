@@ -1,0 +1,7 @@
+﻿stage,event,parent_row_id,child_row_id,parent_amount
+coalesce,MERGE,e3906ff6fa4599986afea384,03b751891ee4962c52bbcac3,303.00
+coalesce,MERGE,297faed645152b48c99b2be5,77c0e1005cf297fd0e9c2a3a,707.00
+coalesce,MERGE,649fd8a1ce6f16b16bbed4b8,b33fd63229e315ad71a3f59d,62.50
+coalesce,MERGE,e988e52b4099264b817d9481,cbd54a0edbcb4f58e015bc45,187.50
+coalesce,MERGE,aaee52a976a7dec1199b342e,9046a8b6932df49aeb26dc24,37.75
+coalesce,MERGE,7a6f108a4a6d650374c93cfc,6d01ff2d6217b92691a226fc,37.75

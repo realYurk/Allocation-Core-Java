@@ -1,0 +1,4 @@
+﻿stage,rule,pool,target,target_row_id,pool_amount,share_amount,driver_weight,driver_denominator,allocated_amount
+st1,r1,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""2026-01"",""P0"",""a,b"",""Cost-A"",""CUR""]",6b69a05fbd5321e561044892,100.00,100.00,1.000000,3.000000,33.34
+st1,r1,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""2026-01"",""P0"",""line\nbreak"",""Cost-A"",""CUR""]",9596f417fa0cb9db64fc592f,100.00,100.00,1.000000,3.000000,33.33
+st1,r1,"[""2026-01"",""P0"",""__POOL__"",""Cost-A"",""CUR""]","[""2026-01"",""P0"",""q\""q"",""Cost-A"",""CUR""]",1ee2e01607eb02cd133121f7,100.00,100.00,1.000000,3.000000,33.33

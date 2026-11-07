@@ -1,0 +1,13 @@
+period,plant,sku,account,weight
+2026-01,P0,S0,Cost-A,1
+2026-01,P0,S0,Cost-B,1
+2026-01,P0,S1,Cost-A,1
+2026-01,P0,S1,Cost-B,1
+2026-01,P1,S0,Cost-A,1
+2026-01,P1,S0,Cost-B,1
+2026-01,P1,S1,Cost-A,1
+2026-01,P1,S1,Cost-B,1
+2026-02,P0,S0,Cost-A,1
+2026-02,P0,S0,Cost-B,1
+2026-02,P0,S1,Cost-A,1
+2026-02,P0,S1,Cost-B,1

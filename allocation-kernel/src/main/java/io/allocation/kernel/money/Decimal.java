@@ -2,6 +2,7 @@ package io.allocation.kernel.money;
 
 import io.allocation.kernel.AllocationException;
 import io.allocation.kernel.ErrorCode;
+import io.allocation.kernel.text.Text;
 
 import java.math.BigInteger;
 
@@ -56,8 +57,8 @@ public final class Decimal {
         if (raw == null) {
             throw invalid("empty decimal");
         }
-        String s = trimGoSpace(raw);
-        if (s.length() > MAX_TEXT_BYTES || utf8Length(s) > MAX_TEXT_BYTES) {
+        String s = Text.trimSpace(raw);
+        if (s.length() > MAX_TEXT_BYTES || Text.utf8Length(s) > MAX_TEXT_BYTES) {
             throw invalid("decimal input exceeds " + MAX_TEXT_BYTES + " bytes");
         }
         if (s.isEmpty()) {
@@ -187,60 +188,4 @@ public final class Decimal {
         return new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, message);
     }
 
-    /**
-     * Trims exactly the characters the reference implementation trims.
-     *
-     * <p>This is the Unicode {@code White_Space} property, which is <em>not</em> identical to
-     * {@link Character#isWhitespace(int)}: it includes U+00A0, U+2007 and U+202F, and excludes
-     * U+001C..U+001F. Using {@link String#strip()} here would accept or reject different inputs.
-     */
-    private static String trimGoSpace(String s) {
-        int begin = 0;
-        int end = s.length();
-        while (begin < end) {
-            int cp = s.codePointAt(begin);
-            if (!isGoSpace(cp)) {
-                break;
-            }
-            begin += Character.charCount(cp);
-        }
-        while (end > begin) {
-            int cp = s.codePointBefore(end);
-            if (!isGoSpace(cp)) {
-                break;
-            }
-            end -= Character.charCount(cp);
-        }
-        return s.substring(begin, end);
-    }
-
-    /** Unicode {@code White_Space} property, matching the reference {@code strings.TrimSpace}. */
-    static boolean isGoSpace(int cp) {
-        return cp == 0x09 || cp == 0x0A || cp == 0x0B || cp == 0x0C || cp == 0x0D
-                || cp == 0x20 || cp == 0x85 || cp == 0xA0 || cp == 0x1680
-                || (cp >= 0x2000 && cp <= 0x200A)
-                || cp == 0x2028 || cp == 0x2029 || cp == 0x202F
-                || cp == 0x205F || cp == 0x3000;
-    }
-
-    private static int utf8Length(String s) {
-        int n = 0;
-        for (int i = 0; i < s.length(); ) {
-            int cp = s.codePointAt(i);
-            if (cp < 0x80) {
-                n += 1;
-            } else if (cp < 0x800) {
-                n += 2;
-            } else if (cp < 0x10000) {
-                n += 3;
-            } else {
-                n += 4;
-            }
-            if (n > MAX_TEXT_BYTES) {
-                return n;
-            }
-            i += Character.charCount(cp);
-        }
-        return n;
-    }
 }

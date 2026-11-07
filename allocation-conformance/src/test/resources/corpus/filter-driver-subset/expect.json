@@ -1,0 +1,4 @@
+{
+  "status": "PASS",
+  "note": "driver_filters restrict rows before candidates are built"
+}
