@@ -21,11 +21,18 @@ import java.util.List;
 public final class Coord implements Comparable<Coord> {
 
     private final String[] members;
-    private final String key;
+    /**
+     * Lazily built canonical key.
+     *
+     * <p>Not {@code final} and not {@code volatile}: the computation is idempotent, so a race can only
+     * cause the same string to be built twice, never an inconsistent value. Driver rows in a
+     * million-row file never need their key, and building one eagerly for each of them costs about
+     * 100 MB for nothing.
+     */
+    private String key;
 
     public Coord(String[] members) {
         this.members = members;
-        this.key = buildKey(members);
     }
 
     public static Coord of(List<String> dimensions, String[] valuesByPosition) {
@@ -73,27 +80,32 @@ public final class Coord implements Comparable<Coord> {
     }
 
     public String key() {
-        return key;
+        String cached = key;
+        if (cached == null) {
+            cached = buildKey(members);
+            key = cached;
+        }
+        return cached;
     }
 
     /** Compares by canonical key in UTF-8 byte order, which is the reference ordering. */
     @Override
     public int compareTo(Coord other) {
-        return Utf8Order.compare(key, other.key);
+        return Utf8Order.compare(key(), other.key());
     }
 
     @Override
     public boolean equals(Object o) {
-        return o instanceof Coord other && key.equals(other.key);
+        return o instanceof Coord other && key().equals(other.key());
     }
 
     @Override
     public int hashCode() {
-        return key.hashCode();
+        return key().hashCode();
     }
 
     @Override
     public String toString() {
-        return key;
+        return key();
     }
 }

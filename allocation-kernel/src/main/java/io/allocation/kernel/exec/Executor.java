@@ -311,66 +311,87 @@ public final class Executor {
             PoolAllocator.RuleContext context =
                     PoolAllocator.build(rule, share, rows, stage, spec, dimensionNames);
             contexts.add(context);
-            checkTargetCompleteness(stage, context, rows);
-            warnOnDuplicateDrivers(stage, rule, rows);
+            checkTargetCompleteness(stage, context);
+            warnOnDuplicateDrivers(stage, rule, context);
         }
         return contexts;
     }
 
-    private void checkTargetCompleteness(StageSpec stage, PoolAllocator.RuleContext context,
-                                         List<DriverRow> driverRows) {
-        Set<Integer> driverDerived = new HashSet<>();
+    private void checkTargetCompleteness(StageSpec stage, PoolAllocator.RuleContext context) {
+        int[] derived = new int[dimensionNames.length];
+        int derivedCount = 0;
         for (int i = 0; i < dimensionNames.length; i++) {
             TargetSpec target = stage.target().get(dimensionNames[i]);
             if (target != null && target.isDriverDerived()) {
-                driverDerived.add(i);
+                derived[derivedCount++] = i;
             }
         }
-        if (driverDerived.isEmpty()) {
+        if (derivedCount == 0) {
             return;
         }
-        Set<String> presentByPosition = new HashSet<>();
-        for (DriverRow row : driverRows) {
-            for (int position : driverDerived) {
-                if (row.coord().has(position)) {
-                    presentByPosition.add(position + "\u0000" + row.coord().member(position));
+        // Members are interned during parsing, so these sets stay tiny regardless of row count.
+        Set<String>[] present = new Set[derivedCount];
+        for (int i = 0; i < derivedCount; i++) {
+            present[i] = new HashSet<>();
+        }
+        for (List<DriverRow> bucket : context.buckets.values()) {
+            for (DriverRow row : bucket) {
+                for (int i = 0; i < derivedCount; i++) {
+                    int position = derived[i];
+                    if (row.coord().has(position)) {
+                        present[i].add(row.coord().member(position));
+                    }
                 }
             }
         }
-        for (int position : driverDerived) {
+        for (int i = 0; i < derivedCount; i++) {
+            int position = derived[i];
             TargetSpec target = stage.target().get(dimensionNames[position]);
             Set<String> declared = io.allocation.kernel.plan.Hierarchy.expand(
                     dimensionNames[position], target.include(), spec.hierarchies());
             for (String member : declared) {
-                if (!presentByPosition.contains(position + "\u0000" + member)) {
-                    String message = "declared target " + member + " on " + dimensionNames[position]
-                            + " has no driver weight in rule " + context.rule.id()
-                            + "; it will silently receive nothing";
-                    if (options.blockOnMissingTarget()) {
-                        throw new AllocationException(ErrorCode.RULE_INVALID, message,
-                                stage.id(), context.rule.id(), null, null);
-                    }
-                    RunSink.Warning warning = new RunSink.Warning(
-                            "W_TARGET_MISSING_DRIVER", message, stage.id(), context.rule.id());
-                    warnings.add(warning);
-                    sink.warning(warning);
+                if (present[i].contains(member)) {
+                    continue;
                 }
+                String message = "declared target " + member + " on " + dimensionNames[position]
+                        + " has no driver weight in rule " + context.rule.id()
+                        + "; it will silently receive nothing";
+                if (options.blockOnMissingTarget()) {
+                    throw new AllocationException(ErrorCode.RULE_INVALID, message,
+                            stage.id(), context.rule.id(), null, null);
+                }
+                RunSink.Warning warning = new RunSink.Warning(
+                        "W_TARGET_MISSING_DRIVER", message, stage.id(), context.rule.id());
+                warnings.add(warning);
+                sink.warning(warning);
             }
         }
     }
 
-    private void warnOnDuplicateDrivers(StageSpec stage, AllocationRule rule, List<DriverRow> driverRows) {
-        Map<String, Integer> counts = new HashMap<>();
+    /**
+     * Reports driver coordinates that appear more than once.
+     *
+     * <p>Duplicates are summed by the allocator, which is correct but rarely intended: it usually means
+     * an export joined two tables and multiplied a partner's weight. Counting is done bucket by bucket
+     * so that peak memory stays proportional to the largest bucket, not to the whole file.
+     */
+    private void warnOnDuplicateDrivers(StageSpec stage, AllocationRule rule,
+                                        PoolAllocator.RuleContext context) {
         int duplicates = 0;
-        for (DriverRow row : driverRows) {
-            int next = counts.merge(row.coord().key(), 1, Integer::sum);
-            if (next == 2) {
-                duplicates++;
+        for (List<DriverRow> bucket : context.buckets.values()) {
+            if (bucket.size() < 2) {
+                continue;
+            }
+            Set<String> keys = new HashSet<>(bucket.size() * 2);
+            for (DriverRow row : bucket) {
+                if (!keys.add(row.coord().key())) {
+                    duplicates++;
+                }
             }
         }
         if (duplicates > 0) {
             RunSink.Warning warning = new RunSink.Warning("W_DUPLICATE_DRIVER_ROWS",
-                    duplicates + " driver coordinate(s) appear more than once in rule " + rule.id()
+                    duplicates + " driver row(s) repeat a coordinate in rule " + rule.id()
                             + "; their weights are summed, which usually indicates an export defect",
                     stage.id(), rule.id());
             warnings.add(warning);

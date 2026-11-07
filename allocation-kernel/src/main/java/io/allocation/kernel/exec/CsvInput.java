@@ -83,7 +83,8 @@ public final class CsvInput implements AllocationInput {
         }
         Integer idPosition = positions.get("row_id");
 
-        List<Row> rows = new ArrayList<>();
+        MemberDictionary dictionary = new MemberDictionary(dimensionPositions.length);
+        List<Row> rows = new ArrayList<>(1024);
         List<String> record;
         int line = 1;
         while ((record = reader.read()) != null) {
@@ -99,7 +100,7 @@ public final class CsvInput implements AllocationInput {
                     throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
                             path + ":" + line + " invalid member " + dimensions.get(i) + ":" + value);
                 }
-                members[i] = value;
+                members[i] = dictionary.intern(i, value);
             }
             if (amountPosition >= record.size()) {
                 throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + ":" + line + " missing amount");
@@ -151,7 +152,8 @@ public final class CsvInput implements AllocationInput {
             throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + " has no matching dimensions");
         }
 
-        List<DriverRow> rows = new ArrayList<>();
+        MemberDictionary dictionary = new MemberDictionary(dimensionPositions.length);
+        List<DriverRow> rows = new ArrayList<>(4096);
         List<String> record;
         int line = 1;
         while ((record = reader.read()) != null) {
@@ -166,7 +168,7 @@ public final class CsvInput implements AllocationInput {
                     throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
                             path + ":" + line + " missing coordinate " + dimensions.get(i));
                 }
-                members[i] = record.get(position);
+                members[i] = dictionary.intern(i, record.get(position));
             }
             if (weightPosition >= record.size()) {
                 throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + ":" + line + " missing weight");
