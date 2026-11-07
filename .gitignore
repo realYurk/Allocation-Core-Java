@@ -1,0 +1,10 @@
+target/
+*.class
+*.jar
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.log
+# Local benchmark scratch space, never committed
+.bench/

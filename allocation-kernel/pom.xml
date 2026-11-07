@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.allocation</groupId>
+    <artifactId>allocation-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>allocation-kernel</artifactId>
+  <name>allocation-kernel</name>
+
+  <!--
+    CONSTITUTION Art.1: this module must have ZERO third-party runtime dependencies.
+    It must be instantiable from a plain `new` in a unit test, and embeddable in any
+    runtime (Flink job, CLI, batch scheduler, Spring bean). Any dependency added here
+    is a constitutional violation; CI runs `mvn -pl allocation-kernel dependency:list`
+    and fails if the runtime classpath is anything other than the JDK.
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>net.jqwik</groupId>
+      <artifactId>jqwik</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+</project>
