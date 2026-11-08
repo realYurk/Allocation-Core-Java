@@ -92,16 +92,3 @@ CREATE TABLE IF NOT EXISTS allocation_result (
   amount     INTEGER NOT NULL,
   PRIMARY KEY (run_id, seq)
 );
-
-CREATE TABLE IF NOT EXISTS allocation_reconcile (
-  run_id      TEXT    NOT NULL REFERENCES allocation_run (run_id) ON DELETE CASCADE,
-  ref_sha256  TEXT    NOT NULL,
-  status      TEXT    NOT NULL,
-  matched     INTEGER NOT NULL DEFAULT 0,
-  differed    INTEGER NOT NULL DEFAULT 0,
-  missing     INTEGER NOT NULL DEFAULT 0,
-  extra       INTEGER NOT NULL DEFAULT 0,
-  report_path TEXT,
-  create_time TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (run_id, ref_sha256)
-);

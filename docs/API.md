@@ -193,8 +193,10 @@ allocation.submit(RunCommand.builder()
 `status ∈ PENDING | RUNNING | PUBLISHED | FAILED | CANCELLED`
 
 `progress` 在 run 执行期间是**实时**的：`totalPools` 在分摊开始前就已确定，`pools` 每完成一个池（更准确说：
-每一批并发池）推进一次，都在执行器自己的循环里取数，不是估算。run 到终态后这些数字来自它已提交的证据
-（`pools` = 池级对账行数，`rows` = 结果行数），因此重启后仍然可读——实时进度本身不做持久化，它是"此刻为真"的数字。
+每一批并发池）推进一次，都在执行器自己的循环里取数，不是估算。run 到终态后这些数字来自 **run 记录本身**
+（`pools` = `pool_count`，`rows` = `row_count`，都是发布时随状态一起写下的），因此重启后仍然可读——实时进度
+本身不做持久化，它是"此刻为真"的数字。终态时 `pools == totalPools`：一个结束了的 run 就是它自己的 100%，
+这个数字不再去数一遍证据（一次 10 万池的 run 不该为了显示一个数字翻 10 万行，见 D-034）。
 
 **`stageId` 是必须读的字段**，因为它说明三个计数属于谁：
 
@@ -285,8 +287,17 @@ DDL 是代码，只保留一份，放在 `ddl/`：
 | `ddl/allocation-postgres.sql` | PostgreSQL 15+ |
 | `ddl/allocation-sqlite.sql` | 本地与测试；由 `SchemaTest` 在 CI 中实际执行 |
 
-六张表：`allocation_rule` / `allocation_run` / `allocation_pool` / `allocation_line` /
-`allocation_result` / `allocation_reconcile`。
+**MySQL / PostgreSQL 的语法从未被服务器验证过**，这是本组件当前的已知风险，写在这里而不是藏起来：CI 只能
+执行 SQLite（唯一能嵌进 JVM 的），开发机上也没有 docker / psql / mysql。缓解措施是
+`SchemaConsistencyTest`——它解析三份文件并逐表比较列名与列序，证明三者描述的是**同一个形状**；它没有证明
+的是语法、`LIMIT ? OFFSET ?` 的参数绑定、`JSON` 列与 `AUTO_INCREMENT` 在这两个方言上的具体行为。第一次接真库
+时，把 `SchemaTest` 与 `JdbcServiceTest` 的入口换成一个真实 `DataSource` 重跑一遍，再删掉这段话。
+
+五张表：`allocation_rule` / `allocation_run` / `allocation_pool` / `allocation_line` /
+`allocation_result`。对账结果**不落表**：它是 `ReconcileOutcome`（一个计数摘要）和一份
+`differences.csv`，因为对账的产物是一份要给人看、要归档的差异文件，不是一行可查询的状态。曾经有一张
+`allocation_reconcile` 表，没有任何代码写它——一张永远没有行的表比没有这张表更糟，它会让宿主在它上面建报表
+（D-033）。
 
 `allocation_result` 存的是最终答案（一条终端输出行），`allocation_line` 存的是它怎么来的
 （每条分配决策的权重、分母、份额）。前者供分页查询，后者供 `explain` 与审计。两者都按 `seq` 升序，
@@ -457,7 +468,7 @@ SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应
 1. `mvn install` 组件（或用企业私服坐标）
 2. 在业务模块 `pom.xml` 加入 `allocation-spring`（自带 `spring-boot-starter-web` 传递依赖；只要引擎不要
    REST，就只引 `allocation-kernel`）
-3. 执行 `ddl/allocation-mysql8.sql`（6 张表）
+3. 执行 `ddl/allocation-mysql8.sql`（5 张表）
 4. `application.yml` 加 `allocation:` 段（可全部省略）
 5. 准备规则 JSON：放进 `allocation.rules-directory`，文件名即规则码（`<ruleCode>.json`）；
    从库里读规则则声明一个 `RuleResolver` Bean

@@ -99,19 +99,3 @@ CREATE TABLE IF NOT EXISTS allocation_result (
   PRIMARY KEY (run_id, seq),
   CONSTRAINT fk_result_run FOREIGN KEY (run_id) REFERENCES allocation_run (run_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-CREATE TABLE IF NOT EXISTS allocation_reconcile (
-  id          BIGINT       NOT NULL AUTO_INCREMENT,
-  run_id      VARCHAR(32)  NOT NULL,
-  ref_sha256  CHAR(64)     NOT NULL,
-  status      VARCHAR(16)  NOT NULL,
-  matched     BIGINT       NOT NULL DEFAULT 0,
-  differed    BIGINT       NOT NULL DEFAULT 0,
-  missing     BIGINT       NOT NULL DEFAULT 0,
-  extra       BIGINT       NOT NULL DEFAULT 0,
-  report_path VARCHAR(512)     NULL,
-  create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  KEY idx_reconcile_run (run_id),
-  CONSTRAINT fk_reconcile_run FOREIGN KEY (run_id) REFERENCES allocation_run (run_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -22,9 +22,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Executes the shipped DDL, so the schema is a tested artefact rather than a paragraph in a document.
  *
  * <p>SQLite is used because it is embeddable; the MySQL and PostgreSQL variants carry the same columns
- * and are reviewed by eye. What this catches is the class of mistake that only shows up at deploy time:
- * a constraint that no database will accept, a column type that cannot hold a 64-bit amount, and a
- * duplicate idempotency key that is silently allowed.
+ * and are reviewed by eye — or, better, by {@link SchemaConsistencyTest}, which compares the three files
+ * column by column without needing a server. What this catches is the class of mistake that only shows up
+ * at deploy time: a constraint that no database will accept, a column type that cannot hold a 64-bit
+ * amount, and a duplicate idempotency key that is silently allowed.
  */
 class SchemaTest {
 
@@ -63,8 +64,8 @@ class SchemaTest {
             }
         }
 
-        assertEquals(List.of("allocation_line", "allocation_pool", "allocation_reconcile",
-                "allocation_result", "allocation_rule", "allocation_run"), tables);
+        assertEquals(List.of("allocation_line", "allocation_pool", "allocation_result",
+                "allocation_rule", "allocation_run"), tables);
     }
 
     @Test

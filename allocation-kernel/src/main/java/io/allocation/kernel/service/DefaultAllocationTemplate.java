@@ -242,21 +242,32 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     /**
      * Progress for a run: live while it is executing, recorded once it is over.
      *
-     * <p>The two sources answer different questions. A finished run's figures are its evidence — pools
-     * checked, rows written — and they survive a restart because they were committed with the run. A
-     * running run has no evidence yet, so without the live figure every poll of a ten-minute job would
+     * <p>The two sources answer different questions. A finished run's figures are its record — pools it
+     * wrote, rows it emitted — and they survive a restart because they were committed with the run. A
+     * running run has no record yet, so without the live figure every poll of a ten-minute job would
      * report zero, which is indistinguishable from a hang.
+     *
+     * <p>The terminal branch does not read the pool evidence, and that is a deliberate half of the
+     * answer: the count was written by the same counter that wrote the rows, so re-deriving it means a
+     * table scan per poll. A UI refreshing a finished 100,000-pool run would pull 100,000 rows each time
+     * to display a number the run row already holds. The cost of not reading is that an abandoned run
+     * (process killed between committing evidence and recording the counts) reports what its record says
+     * — zero — rather than what its orphaned evidence would suggest; a run in that state is already
+     * marked {@code ALLOC_012} and is not something a progress bar can help with.
      */
     private RunView.Progress progressOf(RunRepository.RunRecord record) {
         if (record.status().terminal()) {
-            List<RunRepository.PoolRecord> pools = repository.pools(record.runId());
-            // No stage id: these are the run's own totals, summed over every stage.
-            return new RunView.Progress(null, pools.size(), record.poolCount(), record.rowCount());
+            // No stage id: these are the run's own totals, summed over every stage. Both counts come from
+            // the same place, so a terminal run is 100% of itself by construction and can never report
+            // more completed pools than it has.
+            return new RunView.Progress(null, record.poolCount(), record.poolCount(), record.rowCount());
         }
         AtomicReference<RunView.Progress> live = liveProgress.get(record.runId());
         if (live != null) {
             return live.get();
         }
+        // Executing in another process (or queued and never picked up): the only evidence available is
+        // what that process has already committed.
         return new RunView.Progress(null, repository.pools(record.runId()).size(), record.poolCount(),
                 record.rowCount());
     }

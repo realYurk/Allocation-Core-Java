@@ -59,7 +59,7 @@ Full ruleset: [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md).
 mvn verify
 ```
 
-That is the whole gate: 264 kernel tests, 129 golden-corpus tests, 52 starter tests and 4 example tests,
+That is the whole gate: 268 kernel tests, 129 golden-corpus tests, 52 starter tests and 4 example tests,
 including three that boot a real application on a random port and call the REST contract over HTTP. Update a
 number in `docs/` only after this passes.
 
