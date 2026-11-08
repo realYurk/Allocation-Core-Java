@@ -582,3 +582,87 @@ status=PUBLISHED  input=820000.00  output=820000.00  balanced=true
 
 **已知代价**：一次翻页从 1 条 SQL 变成 1 + P 条（P = 本页涉及的池数，通常个位数到百位数）。每个都是走索引的
 点查，换来的是内存上界从"run 的大小"降到"页的大小 × 池宽"。这是明确的取舍，不是遗漏。
+
+---
+
+## D-027 指标是监听器，不是定时查库的台账
+
+**状态**：已接受
+
+**背景**：P7 的最后一项是"Micrometer 指标：池数、行数、耗时、残余分布、失败原因"。最省事的实现是
+`MeterBinder`：`select count(*) from allocation_run group by status`，每次抓取查一次。它在三个方面是错的，
+而且都错得很安静：
+
+1. 每次抓取一条聚合查询，实例数 × 抓取频率。P7 自己要求"加依赖就能用"，一个让 Prometheus 每 15 秒打一次
+   数据库的 starter 不满足这条。
+2. 它报告的是**所有实例**的 run，而指标通常是按实例做容量决策的。多副本部署下"本节点在跑的 run 数"永远读不到。
+3. 它**算不出耗时**。状态表知道 run 什么时候结束，不知道它从开始到结束花了多久；`started_at`/`finished_at`
+   两个时间戳差可以，但那是把"记录了什么"当成"能算出什么"。
+
+**决策**：指标实现为 `AllocationListener`（`AllocationMetrics`），在 run 自己的线程上记一个数。一次 run 五到八个
+计量操作，与 run 本身的成本相比不可见；零查询；天然按实例；`Started → Published/Failed/Cancelled` 两个时间戳
+就在手上，耗时是减法。
+
+**顺带的三个设计取舍**：
+
+- **`queue.time` 与 `duration` 分开**。合起来的"总耗时"没法回答运维真正要问的问题：是排队排久了（加 worker /
+  提高准入上限），还是跑得慢（优化规则）。分开之后，两个数各自有一个动作。
+- **replay 不产生第二次排队时间**。幂等键命中时 `Submitted(replay=true)` 只是"有人在重试"，它不是一个新的等待。
+  如果覆盖原有提交时间，重试会伪装成容量压力。
+- **终态计数器带零值上线**。三个 `outcome` 的 counter 在构造时就注册为 0：一张只在故障之后才出现的图，在故障
+  期间没人敢信。
+
+**刻意不做的三件事**：
+
+- **池级指标**。10 万池的 run 会为了统计自己多分配 10 万个计量对象——为观测付出的代价，超过了被观测的对象。
+  池级进度已经在 `Executor.Progress` 里，走 `status()` 读。
+- **残余分布**。P7 的原文列了这一项，这里明确不做：要数"多少池拿了余数"，就必须在每池结算循环里加比较——那是
+  D-017/D-025 花了两轮才把成本从热路径上挪开的地方。而这个问题是**正确性**问题，不是容量问题：答案在账本每行的
+  `got_residual` 与 `explain` 里，审计读一次就够。把它做成时序指标，只会得到一条没人会据此做决定的曲线。
+- **分位数与直方图**。宿主开 `management.metrics.distribution.percentiles` 即可；组件替所有部署默认打开，
+  就是让每个部署为一个它可能不导出的功能付时钟与环形缓冲区的钱。
+
+**已知代价**：指标只统计**本进程**的 run。多副本部署要看全局，就得靠 Prometheus 侧按 job 聚合（这是它的本职），
+或者另一个查库的导出器——但那是宿主的监控体系，不是引擎的职责。文档 §5.1 写明了这一点。
+
+---
+
+## D-028 监听器可以不止一个——而 `@ConditionalOnBean` 差点让它一个都不剩
+
+**状态**：已接受
+
+**背景**：加上指标之后，"容器里有几个 `AllocationListener`"从 0/1 变成了 1/2。原来的装配用的是
+`listener.getIfAvailable(AllocationListener::noop)`：两个 Bean 时它抛 `NoUniqueBeanDefinitionException`，
+**应用起不来**。一个宿主没要求过的功能，把宿主自己的配置变成启动失败——这是最坏的一类失败。
+
+同时暴露了第二个坑，且它不报错：`AllocationMetricsAutoConfiguration` 最初写的是
+`@ConditionalOnBean(MeterRegistry.class)`。这个条件只看得见**先于自己处理**的自动配置注册的 Bean，而
+"谁创建 `MeterRegistry`"取决于宿主装了哪个导出后端（actuator 的 `MetricsAutoConfiguration`、
+`SimpleMetricsExportAutoConfiguration`、Prometheus……各有各的排序位置）。示例工程里它的实际表现是：
+
+```
+PROBE MeterRegistry beans: [simpleMeterRegistry]
+PROBE metrics beans: []
+```
+
+注册表在，指标一个都没有，日志里没有一个字。`afterName` 指向 `MetricsAutoConfiguration` 也没用——真正创建
+`simpleMeterRegistry` 的是排在它**之后**的另一个类。
+
+**决策**：
+
+1. **组合而不是唯一**。`AllocationListener.allOf(List)` 按 Bean 顺序转发，**每个监听器单独 try/catch**。一个
+   朴素的 `event -> { a.on(event); b.on(event); }` 在这里是不够的：第一个抛异常，后面的就收不到——"审计表挂了
+   顺手把监控也弄瞎"是那种要查一整天的事故。没有监听器时返回共享的 no-op 实例，引擎的引用比较快路径因此仍然
+   有效；只有一个时原样返回，不套一层为空的组合器。
+2. **不条件化，直接取**。`AllocationMetricsAutoConfiguration` 改成 `ObjectProvider<MeterRegistry>.getIfAvailable()`：
+   任何 Bean 开始实例化时，所有定义都已注册，所以注册表存在就会被按需创建，不存在就返回 null——**与自动配置的
+   处理顺序无关**。没有注册表时这个 Bean 就是共享的 no-op 监听器（返回类型故意声明为 `AllocationListener`），
+   被 `allOf` 丢弃，于是"没装 actuator"的应用回到它原本的状态：一个监听器都没有。
+
+**为什么不是别的东西**：`@ConditionalOnBean` + 更长的 `afterName` 列表是把"宿主装了哪个导出后端"硬编码进组件，
+下一个后端出现时又静悄悄地失效；`MeterBinder` 只解决绑定，不解决"运行事件从哪来"；让宿主自己写指标适配层，
+就是把这一页的坑交给每个宿主各踩一遍。
+
+**这条不再靠文档保证**：`ExampleApplicationTest` 断言示例应用（真实的 Boot 应用、真实的 actuator）里
+`/actuator/metrics/allocation.run.finished?tag=outcome:published` 的计数是 1。上面那个 `metrics beans: []`
+的场景，现在会让 `mvn verify` 变红。

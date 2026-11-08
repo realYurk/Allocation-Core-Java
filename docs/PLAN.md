@@ -218,10 +218,13 @@ MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation
 > 协作式取消（`cancel(runId)`，池批次边界生效，`CANCELLED` 为独立终态）、
 > **运行中实时进度**（`Executor.Progress` 回调 + `status()` 双来源，见 D-021）。
 > 另已完成：`AllocationAuthorizer`（装饰器，先检查后做事，403 不泄露 run 是否存在）与 `AllocationListener`
-> （运行级 sealed 事件，池级仍走 `Progress`），见 D-023；`allocation-example` 作为宿主证据（D-025）。
+> （运行级 sealed 事件，池级仍走 `Progress`），见 D-023；`allocation-example` 作为宿主证据（D-025）；
+> **Micrometer 指标**（`AllocationMetrics`，作为监听器上报 10 个 run 级指标，有 `MeterRegistry` 自动生效，
+> 见 §5.1 与 D-027；多监听器组合见 D-028）。
 > **未做（有意）**：`@EnableAllocation`（自动配置已足够，多一个注解只会多一种启用方式）、OpenAPI 文档生成
 > （契约文档是 `docs/API.md`，机器可读版本等契约稳定后一次性生成）、`TenantProvider` / `DataScopeProvider`
-> （多租户要先改 schema：`tenant_id` + 复合唯一键 + 全部查询带租户条件，见 D-023 末尾）、Micrometer 指标、
+> （多租户要先改 schema：`tenant_id` + 复合唯一键 + 全部查询带租户条件，见 D-023 末尾）、
+> 池级指标与残余分布指标（理由见 D-027，池级进度走 `status()`，残余走账本与 `explain`）、
 > `examples/ruoyi-smoke.sh`（`allocation-example` 覆盖了它的功能面，脚本形式留待真实若依工程联调时再写）。
 
 | 项 | 内容 |

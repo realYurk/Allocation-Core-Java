@@ -262,10 +262,36 @@ allocation:
   max-rows-in-memory: 250000           # 阶段缓冲区溢写阈值，决定峰值堆
   queue-capacity: 16                   # 准入上限，满了返回 ALLOC_007
   recover-interrupted-runs: false      # 启动时把上个进程遗留的 RUNNING/PENDING 钉成 FAILED(ALLOC_012)
+  metrics:
+    enabled: true                      # 有 MeterRegistry 时上报运行指标；见 §5.1
 ```
 
 `recover-interrupted-runs` 默认关闭：只有"一个进程独占数据库"时，"早于本次启动"才等于"没人管了"。
 单实例部署（绝大多数若依场景）可以打开；多实例部署打开它，会把另一个实例正在跑的 run 在纸面上判死。
+
+### 5.1 指标（可选，需要 actuator 或 micrometer）
+
+加上 `spring-boot-starter-actuator` 就自动生效，**不需要任何配置**；不加就没有指标 Bean（`allocation.metrics.enabled=false`
+是给"加了 actuator 但不想要这些序列"的部署用的）。指标来自 `AllocationListener`，不是每次抓取去查库。
+
+| 指标 | 类型 | 标签 | 含义 |
+|---|---|---|---|
+| `allocation.run.submitted` | counter | `rule` | 被接受的提交（含 replay） |
+| `allocation.run.replayed` | counter | `rule` | 幂等键命中，没有产生新 run。持续上涨是客户端在重试，不是负载 |
+| `allocation.run.started` | counter | — | 真正开始执行的 run |
+| `allocation.run.finished` | counter | `outcome`=`published\|failed\|cancelled` | 终态分布 |
+| `allocation.run.failure` | counter | `code`=`ALLOC_0xx` | 失败原因；与上一条的 `outcome=failed` 是同一件事的两个切面 |
+| `allocation.run.queue.time` | timer | `rule` | 提交 → 开始。**这个数涨了就意味着加 worker 或压队列** |
+| `allocation.run.duration` | timer | `rule` | 开始 → 终态，不含排队 |
+| `allocation.run.pools` / `.rows` | distribution | — | 每次发布 run 的池数与结果行数 |
+| `allocation.run.amount` | distribution | — | 每次发布 run 的输出金额，单位是内核的整数最小单位 |
+| `allocation.run.in.flight` | gauge | — | 本进程内已提交未终态的 run |
+
+三条刻意的缺席，都在 D-027 里写了原因：**池级指标**（10 万池的 run 会为了统计自己多分配 10 万个对象）、
+**残余分布**（"多少池拿了余数"是正确性问题，答案在账本的 `got_residual` 与 `explain`，不在监控里）、
+**分位数/直方图**（要就在宿主侧开 `management.metrics.distribution.percentiles`，组件不替所有部署决定这笔开销）。
+
+`rule` 是域名，`code` 是错误码，两者都是部署期常量；run id 永远不做标签。
 
 **未实现（写在这里只是说明曾经的计划，配了也不会生效）**：`job.timeout`、`job.cancel-poll-interval`、
 `storage.*`、`integrity.*`、`limits.*`。对应的能力目前在别处：并行度是 `workers`，明细保留是每次提交的
@@ -283,7 +309,8 @@ allocation:
 | `RuleResolver` | `DirectoryRuleResolver`（`allocation.rules-directory`） | ✅ 已实现 | 规则从库/配置中心来 |
 | `AllocationInput` | `CsvInput` | ✅ 已实现 | 覆盖流式的 `forEachAmount` / `forEachDriver` |
 | `Executor.Progress` | 无操作 | ✅ 已实现 | 运行期进度（池数/行数）的外部上报 |
-| `AllocationListener` | 无操作 | ✅ 已实现 | 运行事件（提交/开始/发布/失败/取消） |
+| `AllocationListener` | 无操作 | ✅ 已实现 | 运行事件（提交/开始/发布/失败/取消）；**可以声明多个**，按 Bean 顺序组合 |
+| `AllocationMetrics` | 有 `MeterRegistry` 时自动注册 | ✅ 已实现（`allocation-spring`） | 见 §5.1；宿主声明同类型 Bean 即可接管 |
 | `AllocationAuthorizer` | 全部放行 | ✅ 已实现（`allocation-spring`） | 接若依 `@PreAuthorize` |
 | `TenantProvider` / `DataScopeProvider` | 固定值 / 不限制 | ⬜ 计划中 | 接若依租户与 `@DataScope` |
 
@@ -293,6 +320,11 @@ SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应
 **事件的粒度**：`AllocationListener` 只报运行级事件，不报池级事件——一次 10 万池的运行会产出 10 万条事件，
 而池级进度已经由 `Executor.Progress` 以计数器形式提供（热路径上读一个数，不分配对象）。事件在**运行自己的
 线程上**回调，实现必须快且不得抛异常；引擎会捕获并记日志，所以一个坏监听器不会把成功的运行变成失败的运行。
+
+**多个监听器是一等场景，不是例外**：宿主有自己的审计钩子，而 starter 可能自带一个（指标）。`allocation-spring`
+把容器里的所有 `AllocationListener` 用 `AllocationListener.allOf` 组合后交给引擎，**每个监听器单独 try/catch**
+——否则第一个抛异常的监听器会让后面的收不到事件，而"审计表挂了导致监控也瞎了"是最难查的那类故障。只有一个
+监听器时不做包装，一个都没有时传共享的 no-op 实例（引擎按引用比较，跳过整个通知路径）。
 
 **鉴权在边界，不在内核**。`AllocationAuthorizer` 是 `allocation-spring` 里的装饰器（`AuthorizingAllocationTemplate`），
 在调用引擎之前检查，所以被拒绝的请求不会建 run、不读规则、不开连接；顺带保证了"无权读"与"不存在"返回同一个
