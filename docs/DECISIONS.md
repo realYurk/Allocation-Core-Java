@@ -761,7 +761,7 @@ bug 换了层皮。
 - `allocation_run` 加 `tenant_id VARCHAR(64) NOT NULL DEFAULT ''`，唯一键改成 `(tenant_id, idempotency_key)`。
   默认值的意义不是"留空好看"：单租户部署下它永远是 `''`，复合键退化成原来那个键，**同一份 SQL 在两种部署下
   都跑**。没有"多租户模式"开关——模式是一个只在一边被测试过的分支。
-- 子表（pool / line / result / reconcile）**不加** `tenant_id`。`run_id` 是全局主键，这些行只能经由一个 run
+- 子表（pool / line / result）**不加** `tenant_id`。`run_id` 是全局主键，这些行只能经由一个 run
   到达，而租户在 run 上已经判过了；给百万行明细加一列只承载可推导信息的字符串，是拿存储和写放大换一个已经
   成立的保证。
 - 过滤器只有一处：`find(runId)`。引擎里所有读路径——`status` / `await` / `result` / `explain` / `reconcile` /

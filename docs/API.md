@@ -307,11 +307,12 @@ DDL 是代码，只保留一份，放在 `ddl/`：
 1..30 个维度，固定列集不存在；存引擎自己的规范键，读回来的字符串和现在算出来的逐字节相同。
 
 **旧库升级**（`tenant_id` 之前建过表的）：`ALTER TABLE allocation_run ADD COLUMN tenant_id VARCHAR(64) NOT NULL
-DEFAULT ''`，再把 `idempotency_key` 上的唯一键换成 `(tenant_id, idempotency_key)`
-（MySQL：`ALTER TABLE allocation_run DROP INDEX uk_idem, ADD UNIQUE KEY uk_idem (tenant_id, idempotency_key)`；
+DEFAULT ''`，再把 `idempotency_key` 上的唯一键换成 `(tenant_id, idempotency_key)`（MySQL：`ALTER TABLE allocation_run DROP INDEX uk_idem, ADD UNIQUE KEY uk_idem (tenant_id, idempotency_key)`；
 PostgreSQL 的旧约束名是 `allocation_run_idempotency_key_key`）。SQLite 不能改约束，重跑
 `ddl/allocation-sqlite.sql` 到新库即可。存量行的 `tenant_id` 落 `''`——它们会成为"系统上下文可见、任何租户
 不可见"的历史，这正是升级时的正确语义。
+
+如果已经建过 `allocation_reconcile`，直接 `DROP TABLE`：没有任何代码写它（D-033）。
 
 **金额约定**：所有 `*_amount` 列都是「10^-precision 个最小单位」的整数，precision 来自规则（0..6）。`123456` 在 precision=2 时表示 `1234.56`。用 `BIGINT` 而不是 `DECIMAL`，是为了让数据库里存的值和
 引擎里算的值是同一个整数，搬运过程中不可能发生二次舍入。
@@ -322,7 +323,7 @@ PostgreSQL 的旧约束名是 `allocation_run_idempotency_key_key`）。SQLite �
 
 **租户**：`allocation_run.tenant_id` 默认 `''`，单租户部署下永远是这个值，唯一键因此退化回
 "`idempotency_key` 唯一"，与从前逐字相同——同一份 SQL 在两种部署下都跑，没有"多租户模式"开关。子表
-（`allocation_pool` / `allocation_line` / `allocation_result` / `allocation_reconcile`）**没有** `tenant_id`：
+（`allocation_pool` / `allocation_line` / `allocation_result`）**没有** `tenant_id`：
 `run_id` 是全局主键，这些行只能经由一个 run 到达，而租户在 run 上已经判过了。需要"按租户列出 run"的
 宿主，自己加一个 `(tenant_id, create_time)` 索引——组件从不发这条查询。
 
