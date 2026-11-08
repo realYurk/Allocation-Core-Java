@@ -185,7 +185,8 @@ allocation.submit(RunCommand.builder()
 ### 2.3 `GET /allocation/runs/{runId}`
 
 ```json
-{ "runId":"01J9...", "status":"RUNNING", "progress": { "pools": 620, "totalPools": 1000, "rows": 620000 },
+{ "runId":"01J9...", "status":"RUNNING",
+  "progress": { "stageId":"allocate-dept", "pools": 620, "totalPools": 1000, "rows": 620000 },
   "startedAt":"2026-11-07T14:00:00Z", "elapsedMs": 3200 }
 ```
 
@@ -194,6 +195,16 @@ allocation.submit(RunCommand.builder()
 `progress` 在 run 执行期间是**实时**的：`totalPools` 在分摊开始前就已确定，`pools` 每完成一个池（更准确说：
 每一批并发池）推进一次，都在执行器自己的循环里取数，不是估算。run 到终态后这些数字来自它已提交的证据
 （`pools` = 池级对账行数，`rows` = 结果行数），因此重启后仍然可读——实时进度本身不做持久化，它是"此刻为真"的数字。
+
+**`stageId` 是必须读的字段**，因为它说明三个计数属于谁：
+
+| 取值 | 含义 |
+|---|---|
+| 阶段 id（如 `allocate-dept`） | 三个数只描述**这一个阶段**。多阶段规则换阶段时 `pools` 会从满回到 0，`totalPools` 换成新阶段的分母——这是换了一个口径，不是进度倒退 |
+| `null` | 三个数是**整个 run** 的合计（所有阶段）。终态时一定是这一种：数字来自已提交的证据，没有"当前阶段"可指 |
+
+一个阶段内部的进度条请用 `pools / totalPools`；跨阶段的总体进度请自己记"哪个阶段完成了"（或数
+`status` 之后的总行数），**不要**把不同 `stageId` 的两个 `pools` 相减。
 
 ### 2.4 `GET /allocation/runs/{runId}/result?page=1&size=500`
 

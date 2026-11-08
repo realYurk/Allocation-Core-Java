@@ -10,11 +10,22 @@ public record RunView(String runId, RunRepository.Status status, Progress progre
                       long startedAtEpochMs, long elapsedMs) {
 
     /**
-     * Coarse progress.
+     * Coarse progress, scoped to one stage.
      *
-     * @param pools      pools completed so far
-     * @param totalPools total pools in the plan, known before execution starts
+     * <p>{@code stageId} is the stage the two pool counters belong to. It is {@code null} when the numbers
+     * describe the whole run, which is what a finished run reports: its pools come from committed
+     * evidence, so there is no "current" stage to name.
+     *
+     * <p>The scope field exists because without it these numbers move backwards. A two-stage rule reports
+     * {@code 4/4} at the end of the first stage and {@code 0/12} at the start of the second, so a progress
+     * bar built on {@code pools / totalPools} goes from complete to zero while the run has only gained
+     * progress. The counters were not wrong; the word they belong to was missing.
+     *
+     * @param stageId    stage these counters describe, or {@code null} for the run as a whole
+     * @param pools      pools completed in that scope
+     * @param totalPools pools in that scope, known before the stage starts so a denominator always exists
+     * @param rows       rows written so far in that scope
      */
-    public record Progress(int pools, int totalPools, long rows) {
+    public record Progress(String stageId, int pools, int totalPools, long rows) {
     }
 }

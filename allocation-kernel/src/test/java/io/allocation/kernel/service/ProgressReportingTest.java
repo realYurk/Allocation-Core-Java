@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -55,6 +56,9 @@ class ProgressReportingTest {
             assertEquals(RunRepository.Status.RUNNING, running.status());
             assertEquals(2, running.progress().totalPools(), "the denominator must be known up front");
             assertEquals(1, running.progress().pools(), "pool 1 finished, pool 2 has not");
+            assertEquals("st1", running.progress().stageId(),
+                    "the counters belong to a stage; without the name a two-stage run looks like it "
+                            + "restarts when the second stage begins");
             assertTrue(running.progress().rows() >= 2,
                     "rows must reflect what has been written, was " + running.progress().rows());
 
@@ -65,6 +69,8 @@ class ProgressReportingTest {
             assertEquals(RunRepository.Status.PUBLISHED, published.status());
             assertEquals(2, published.progress().pools());
             assertEquals(4, published.progress().rows());
+            assertNull(published.progress().stageId(),
+                    "a finished run's numbers are the run's own, summed over every stage");
         } finally {
             template.close();
         }
@@ -86,6 +92,7 @@ class ProgressReportingTest {
             assertEquals(0, view.progress().pools());
             assertEquals(0, view.progress().totalPools());
             assertEquals(0L, view.progress().rows());
+            assertNull(view.progress().stageId(), "a run that has not started has no stage to name");
         } finally {
             template.close();
         }

@@ -143,9 +143,10 @@ public final class ApiMapper {
 
     public static Api.StatusResponse status(RunView view) {
         RunView.Progress progress = view.progress() == null
-                ? new RunView.Progress(0, 0, 0L) : view.progress();
+                ? new RunView.Progress(null, 0, 0, 0L) : view.progress();
         return new Api.StatusResponse(view.runId(), view.status().name(),
-                new Api.ProgressResponse(progress.pools(), progress.totalPools(), progress.rows()),
+                new Api.ProgressResponse(progress.stageId(), progress.pools(), progress.totalPools(),
+                        progress.rows()),
                 instant(view.startedAtEpochMs()), view.elapsedMs());
     }
 

@@ -205,7 +205,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         // Registered before dispatch, so a cancel that arrives while the run is still queued is not lost,
         // and so the first poll of a queued run already has something to report.
         cancellations.put(pending.runId(), new AtomicBoolean());
-        AtomicReference<RunView.Progress> progress = new AtomicReference<>(new RunView.Progress(0, 0, 0L));
+        AtomicReference<RunView.Progress> progress = new AtomicReference<>(new RunView.Progress(null, 0, 0, 0L));
         liveProgress.put(pending.runId(), progress);
         notify(new AllocationListener.Submitted(pending.runId(), rule.code(), false,
                 System.currentTimeMillis()));
@@ -250,13 +250,14 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     private RunView.Progress progressOf(RunRepository.RunRecord record) {
         if (record.status().terminal()) {
             List<RunRepository.PoolRecord> pools = repository.pools(record.runId());
-            return new RunView.Progress(pools.size(), record.poolCount(), record.rowCount());
+            // No stage id: these are the run's own totals, summed over every stage.
+            return new RunView.Progress(null, pools.size(), record.poolCount(), record.rowCount());
         }
         AtomicReference<RunView.Progress> live = liveProgress.get(record.runId());
         if (live != null) {
             return live.get();
         }
-        return new RunView.Progress(repository.pools(record.runId()).size(), record.poolCount(),
+        return new RunView.Progress(null, repository.pools(record.runId()).size(), record.poolCount(),
                 record.rowCount());
     }
 
@@ -388,8 +389,8 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
                             command.options().failOnMissingTarget(),
                             command.options().maxRowsInMemory()),
                     cancelled == null ? Executor.Cancellation.none() : cancelled::get,
-                    (stageId, totalPools, completedPools, rows) ->
-                            progress.set(new RunView.Progress(completedPools, totalPools, rows)));
+                    (stageId, totalPools, completedPools, rows) -> progress.set(
+                            new RunView.Progress(stageId, completedPools, totalPools, rows)));
 
             // Evidence first, status second. A poller that sees PUBLISHED can therefore always read a
             // complete result set, which is the only ordering that makes the status meaningful.

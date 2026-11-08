@@ -68,8 +68,14 @@ public final class Api {
     public record SubmitResponse(String runId, String status, boolean idempotentReplay) {
     }
 
-    /** Coarse progress. */
-    public record ProgressResponse(int pools, int totalPools, long rows) {
+    /**
+     * Coarse progress.
+     *
+     * <p>{@code stageId} names the stage the two pool counters belong to, and is null for a finished run
+     * whose numbers are summed over every stage. Without it a two-stage run appears to jump from complete
+     * back to zero when the second stage starts (docs/API.md §2.3).
+     */
+    public record ProgressResponse(String stageId, int pools, int totalPools, long rows) {
     }
 
     /** Poll one run. */
