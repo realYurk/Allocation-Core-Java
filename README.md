@@ -66,7 +66,7 @@ Either alone would be self-verification; together they are evidence. See [`docs/
 mvn verify
 ```
 
-That is the whole gate: 288 kernel tests, 129 golden-corpus tests, 52 starter tests and 4 example tests,
+That is the whole gate: 301 kernel tests, 129 golden-corpus tests, 52 starter tests and 4 example tests,
 including three that boot a real application on a random port and call the REST contract over HTTP. Update a
 number in `docs/` only after this passes. Eight more kernel tests are opt-in and exercise the shipped MySQL
 schema against a real server (`mvn -pl allocation-kernel test -Dtest=JdbcMySqlTest -Dmysql.url=...`); CI has

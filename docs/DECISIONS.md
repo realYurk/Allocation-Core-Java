@@ -1093,3 +1093,32 @@ line 先撞）。
 需要重新冻结语料时被调用。归档整个 Go 工程进 `Allocation-Core-Java` 会引入一份只读、无构建、纯体积
 的副本，且与本仓库"Java 组件"的定位相悖；语料一旦冻结，Go 就不再是运行时依赖。若未来怀疑语料来源，
 `freeze_golden.sh` 的用法注释已说明它需要 Go 参考二进制，从原工程重新构建即可复现。
+
+---
+
+## D-041 把 W2 副证人从 Apportion 扩展到整个 money 包——Overflow 与 Decimal 也补上独立 oracle
+
+**状态**：已接受
+
+**背景**：D-040 落地了 W2 的第一块——`ApportionPropertiesTest`。但金额路径上不只有 `Apportion` 这
+一个"语义心脏"：`Overflow` 是所有精确运算的守卫（它写错，溢出就静默回绕，而守恒检查照样通过），
+`Decimal` 是缩放定点数的编解码入口（它写错，一分钱在解析或格式化时消失）。这两个类此前**零属性测试**：
+`Overflow` 甚至没有一个专门的测试类——`mulFits` 的 `(x*y)/y == x` 探针、`subExact` 的 `MIN_VALUE` 特例、
+`unsignedMagnitude` 的 `-MIN_VALUE` 回绕，全是"最易写错、且一旦写错就静默错"的边界，却被生产代码
+`Apportion` 间接调用掩盖了"没有直接测试"这一事实。
+
+**决策**：补两个属性测试类，各配一个独立 `BigInteger` oracle：
+
+1. **`OverflowPropertiesTest`**：`mulFits`/`subExact`/`addExact`/`mulExact`/`negExact`/
+   `unsignedMagnitude` 全部用 `BigInteger` 对拍。最关键的一条是 `mulFitsIsCorrectOnTwentyMillionRandomInputs`
+   ——2000 万随机 `(x,y)` 上验证 `(x*y)/y == x` 探针与 `MIN_VALUE <= x*y <= MAX_VALUE` 判据**零失配**，
+   把"探针正确"从口头常识变成被 2000 万样本锁住的证据。`mulFits` 正确性是 `Apportion` 快速路径能放心
+   进入的前提，这条证据是整个 fast/general 双路径契约的地基。
+2. **`DecimalPropertiesTest`**：`parseScaled` 用独立 `BigInteger` 解析器对拍、`format` 用独立
+   `BigInteger` 格式化器对拍、两者再交叉（format 出的文本喂给 parse），外加 fast/big 路径阈值断言和
+   `Long.MIN_VALUE` 幅度大一的不对称断言。
+
+**没有做的事**：没有给 `Decimal` 的"拒绝路径"做属性测试——malformed 字面量的拒绝已由 `DecimalTest`
+的规格表向量穷举（`1.2.3`、`--1`、`.5`、`1e5`、`0x10`、超长、超范围），属性测试专注"有效输入的数学
+正确性"，二者互补而非重复。也没有把 W2 搬进 `allocation-conformance` 模块——W2 是单元级证据，放在
+被它验证的 `allocation-kernel` 里，与 W1（跨语言差分）在 conformance 里的定位天然不同。
