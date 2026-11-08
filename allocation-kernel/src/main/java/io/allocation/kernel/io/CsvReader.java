@@ -41,6 +41,19 @@ public final class CsvReader {
         this.data = data;
     }
 
+    /**
+     * Parses one record that has already been extracted from a larger document.
+     *
+     * <p>Exists so {@link StreamingCsvReader} can reuse this grammar without renumbering its own errors:
+     * a diagnostic that says "record 1" for the thousandth row of a file is worse than no diagnostic.
+     *
+     * @param recordNumberInFile the position this record occupies in the whole document
+     */
+    CsvReader(byte[] data, int recordNumberInFile) {
+        this.data = data;
+        this.recordNumber = Math.max(0, recordNumberInFile - 1);
+    }
+
     /** Number of the last record returned; the header counts as record 1. */
     public int recordNumber() {
         return recordNumber;
