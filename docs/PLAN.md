@@ -268,7 +268,7 @@ MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation
 3. 池内临时结构复用（ThreadLocal 池化）
 4. 结果写出：缓冲 + 手写数字格式化（避免 `String.format`）
 5. JMH：`Apportion` 10/100/1000/10000 四档，端到端 100k/1M
-6. 与 Go 基线对比报告（写入 `docs/java-port/PERF.md`）
+6. 与 Go 基线对比报告（写入 `docs/PERF.md`）
 
 **已知陷阱**：Java 若照抄 Go 的 `map[string]string`，1M 行会吃掉 1.5–2GB 并 GC 抖动。列式改造不是优化，是可行性前提。
 
@@ -386,7 +386,7 @@ fix/...  chore/...  perf/...
 
 ## 6. 进度可见性
 
-每个阶段结束时产出一份 `docs/java-port/reports/<phase>.md`，包含：
+每个阶段结束时产出一份 `docs/reports/<phase>.md`，包含：
 
 - 实际人天 vs 计划
 - 语料通过数 / 总数

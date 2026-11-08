@@ -38,6 +38,13 @@ that answer has to be conserved, deterministic, and independent of file order.
 
 Full ruleset: [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md).
 
+Correctness is proven by two independent witnesses, not by the tests passing once. The golden corpus
+(`allocation-conformance`, frozen from the Go reference) proves the port still computes what the
+proven implementation computed; a jqwik property suite with an independent `BigInteger` rational
+oracle (`ApportionPropertiesTest`, a million random inputs including signed weights and
+`Long.MIN_VALUE`) proves it is mathematically correct where the reference might itself be wrong.
+Either alone would be self-verification; together they are evidence. See [`docs/ORACLE.md`](docs/ORACLE.md).
+
 ## Modules
 
 | Module | Purpose | Dependencies |
@@ -59,7 +66,7 @@ Full ruleset: [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md).
 mvn verify
 ```
 
-That is the whole gate: 270 kernel tests, 129 golden-corpus tests, 52 starter tests and 4 example tests,
+That is the whole gate: 288 kernel tests, 129 golden-corpus tests, 52 starter tests and 4 example tests,
 including three that boot a real application on a random port and call the REST contract over HTTP. Update a
 number in `docs/` only after this passes. Eight more kernel tests are opt-in and exercise the shipped MySQL
 schema against a real server (`mvn -pl allocation-kernel test -Dtest=JdbcMySqlTest -Dmysql.url=...`); CI has

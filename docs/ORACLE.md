@@ -2,6 +2,15 @@
 
 > 目标：**Java 版上线后，Go 完全消失，但"算得和以前一样"这件事仍然可被证明。**
 
+> **落地现状（与本文档设计意图的差异）**：本文档描述的是理想化的 `golden/` + `manifest.json` 结构。
+> 实际落地时做了两处收敛，但双证人机制本身完整保留：
+> 1. 语料目录实际是 `allocation-conformance/src/test/resources/corpus/`，每个场景一个目录、`.golden/`
+>    存期望输出（无 `manifest.json`，指纹由 git 的不可变性承担）。
+> 2. 冻结脚本是 `tools/freeze_golden.sh`（调 Go 参考二进制一次），语料生成器是 `tools/gen_corpus.py`；
+>    Go 参考实现**未归档进本仓库**，仍留在原 Go 工程。副证人（W2）已实现为
+>    `allocation-kernel/.../money/ApportionPropertiesTest`（jqwik 属性 + 百万随机输入 vs 独立 BigInteger oracle）。
+> 下面的 `golden/`、`legacy/`、`corpus-gen.jar` 等字样，读作"语料目录""Go 参考实现""语料生成脚本"即可。
+
 ---
 
 ## 1. 核心思路
@@ -58,6 +67,10 @@
 两条路径在同一输入上必须给出**完全相同的整数结果**。任何不一致都是缺陷（可能出在任一侧）。
 
 W2 只存在于 `src/test`，不进入生产代码。
+
+**W2 的落地**：`allocation-kernel/src/test/java/io/allocation/kernel/money/ApportionPropertiesTest`——
+jqwik 属性测试（§6 的 P1–P8）加一个 `fastPathAndGeneralPathAgreeOnMillionRandomInputs`（100 万随机输入
+对拍独立 BigInteger oracle）。它用精确有理数重算每个分片、按 UTF-8 字节序平局，与生产 `long` 路径零代码共享。
 
 ---
 
@@ -160,7 +173,7 @@ git tag oracle-spec-v1
 
 ## 6. 属性测试（jqwik）
 
-必须实现的属性：
+已实现于 `ApportionPropertiesTest`。覆盖的属性：
 
 | 属性 | 表述 |
 |---|---|
@@ -174,6 +187,10 @@ git tag oracle-spec-v1
 | P8 单目标 | `len(w)==1` 时 `v[0] == total`（含 MinInt64） |
 
 P3 与 P7 是"看起来显然但极易写错"的两条，必须保留。
+
+另有 `fastPathAndGeneralPathAgreeOnMillionRandomInputs`：100 万随机输入（含负权重、零权重、
+MinInt64/MaxInt64、emoji/CJK 平局）上对拍独立 BigInteger oracle，兑现 `Apportion` 类注释里
+"property tests assert they agree on millions of random inputs"的承诺。
 
 ---
 

@@ -1051,3 +1051,45 @@ line 先撞）。
 
 **没有做的事**：没有给 `allocation_result.coordinate` 加索引。它从不需要按坐标查——`results` 按 `seq` 分页、
 `linesForTargets` 按 `target_key` 查 line。给一个没人按它查的列加索引，是给写放大付钱买不存在的读。
+
+---
+
+## D-040 兑现"双证人"里只写了一半的副证人，并把文档里悬空的承诺落地
+
+**状态**：已接受
+
+**背景**：ORACLE.md 的"双证人"机制要求两个独立证人——W1（黄金语料，证明"和过去一致"）和 W2（独立
+有理数 oracle，证明"数学上正确"）。W1 自 P0 起就完整落地；但 W2 一直停在纸面上：jqwik 依赖在
+`allocation-kernel/pom.xml` 里加了（1.9.0），仓库里却**没有一个 `@Property` 测试**。同时 `Apportion`
+的类注释写着 *"property tests assert they agree on millions of random inputs"*，这句承诺对应的测试
+根本不存在——它要么从没写过，要么写了被删了。AI-PLAYBOOK 还引用了一个不存在的
+`mvn ... -Dtest=ApportionProperties` 命令。
+
+这比"少个测试"严重：它意味着对分摊引擎这个"每一分钱都要能解释"的组件，唯一能证明"Go 参考实现
+某个边界若算错了、Java 不会跟着一起错"的机制，是缺失的。黄金语料忠实复现 Go 的一切——包括 Go 的
+错误。没有 W2，"双证人"实际上退化成"单证人自我循环"。
+
+**决策**：落地 W2，作为 `ApportionPropertiesTest`：
+
+1. **八条 jqwik 属性（ORACLE.md §6 的 P1–P8）**：守恒、非负、单调、置换不变、幂等、残余有界、零
+   权重、单目标。每条 500–2000 次随机尝试，覆盖负 total、负权重（signed）、零权重、宽权重域。
+2. **`fastPathAndGeneralPathAgreeOnMillionRandomInputs`**：100 万随机输入（含 `Long.MIN/MAX_VALUE`、
+   负权重、零权重、emoji/CJK 平局身份）上，用**独立 BigInteger 精确有理数 oracle**（交叉相乘、
+   不共享生产任何代码）对拍 `Apportion.split`。oracle 的平局裁决用 `Utf8Order`（UTF-8 字节序），与
+   生产一致——因为它裁决的是**规范**，不是实现细节。
+
+顺带修掉一个被 `"S0","S1"...` 这类恰好字典序的身份掩盖的隐患：`ApportionTest.referenceSplit` 用
+`Integer.compare(a, b)`（**位置序**）做平局裁决，与生产代码的 UTF-8 字节序不一致。改成语义一致的
+`Utf8Order.compare(ids[a], ids[b])`。这正是"参考实现自己也能写错"的活例。
+
+**同时**：把三份文档里悬空/漂移的路径修正为现实，否则下一个读者会被导到不存在的地方——AI-PLAYBOOK
+的包结构（`apportion/rule/evidence/error` → 实际 `money/spec/exec/reconcile/...`）、目录（`golden/`、
+`legacy/` → 实际 `allocation-conformance/.../corpus/`）、命令（`-Dgolden.filter`、`ApportionProperties`）、
+以及贯穿 AI-PLAYBOOK/CONSTITUTION/PLAN 的 `docs/java-port/` 前缀（文档早就不在该子目录了）。ORACLE.md
+顶部加"落地现状"段，明确设计意图（`golden/`+`manifest.json`）与实际落地（`corpus/`+`freeze_golden.sh`）
+的映射，而非逐行抹掉设计意图。
+
+**没有做的事**：没有把 Go 参考实现归档进本仓库（`legacy/`）。它仍在原 Go 工程，只在 `freeze_golden.sh`
+需要重新冻结语料时被调用。归档整个 Go 工程进 `Allocation-Core-Java` 会引入一份只读、无构建、纯体积
+的副本，且与本仓库"Java 组件"的定位相悖；语料一旦冻结，Go 就不再是运行时依赖。若未来怀疑语料来源，
+`freeze_golden.sh` 的用法注释已说明它需要 Go 参考二进制，从原工程重新构建即可复现。

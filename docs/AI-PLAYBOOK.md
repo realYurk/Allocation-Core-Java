@@ -13,9 +13,9 @@ description: 把 Allocation-Core 分摊引擎用 Java 21 重写为可嵌入若�
 ## 0. 开工前必读（顺序不可跳过）
 
 ```
-1. docs/java-port/CONSTITUTION.md     ← 15 条铁律，违反即返工
-2. docs/java-port/SEMANTICS.md        ← 唯一行为规格，尤其是 §2 Apportion
-3. docs/java-port/PLAN.md             ← 你在哪个阶段、当前门禁是什么
+1. docs/CONSTITUTION.md     ← 15 条铁律，违反即返工
+2. docs/SEMANTICS.md        ← 唯一行为规格，尤其是 §2 Apportion
+3. docs/PLAN.md             ← 你在哪个阶段、当前门禁是什么
 ```
 
 **没读完这三份就开始写代码，是本次任务失败的最主要原因。**
@@ -41,9 +41,9 @@ description: 把 Allocation-Core 分摊引擎用 Java 21 重写为可嵌入若�
 ### 2.1 实现某个阶段（P1–P9）
 
 1. 打开 `PLAN.md` 找到该阶段的**交付物清单**和**门禁**。
-2. 只做清单内的事。清单外的东西记到 `docs/java-port/BACKLOG.md`，不要顺手做。
+2. 只做清单内的事。清单外的东西记到 `docs/BACKLOG.md`，不要顺手做。
 3. 每完成一个子任务，跑该子任务对应的测试，**不要攒到最后一起跑**。
-4. 阶段结束时写 `docs/java-port/reports/<phase>.md`（模板见 §6）。
+4. 阶段结束时写 `docs/reports/<phase>.md`（模板见 §6）。
 
 ### 2.2 修复一个分摊结果不一致
 
@@ -91,20 +91,24 @@ description: 把 Allocation-Core 分摊引擎用 Java 21 重写为可嵌入若�
 
 ```
 allocation-kernel/src/main/java/io/allocation/kernel/
-├── money/       Money, Scale, Overflow      ← 先看这里，金额类型的唯一入口
-├── apportion/   Apportion, Residual         ← 核心算法，与 SEMANTICS §2 一一对应
-├── rule/        Spec, Stage, Target, ...    ← DSL 的 Java 表达（record/sealed）
-├── plan/        Compiler, Plan, StageGraph  ← 规则 → 可执行计划
-├── exec/        Executor, PoolPlanner, DriverIndex, RowBatch
-├── evidence/    Ledger, Lineage, Conservation
-└── error/       AllocationException, ErrorCode
+├── money/       Decimal, Apportion, Overflow   ← 金额类型的唯一入口，核心算法在此
+├── spec/        Spec, Stage, Target, ...       ← DSL 的 Java 表达（record/sealed）
+├── plan/        Compiler, Plan, StageGraph     ← 规则 → 可执行计划
+├── exec/        Executor, PoolAllocator, RowStore
+├── coord/       Coord, Utf8Order, MemberDictionary  ← 坐标与平局裁决
+├── json/        Json, SpecCodec                ← 规则字节的编解码
+├── io/          CsvInput, CsvDirectorySink     ← 文件输入/输出
+├── reconcile/   Reconciler, ShardedReconciler  ← 逐坐标对账
+├── service/     AllocationTemplate, RunRepository ← 服务层与仓储
+└── sink/        RunSink, RepositorySink        ← 证据写出
 
-allocation-conformance/    ← 测试专用：golden 运行器、属性测试、有理数 oracle
-golden/                    ← 冻结语料，不可变
-legacy/                    ← Go 参考实现归档，只读，不参与构建
+allocation-conformance/    ← 测试专用：golden 语料运行器（CorpusTest）
+   src/test/resources/corpus/   ← 冻结语料（每个场景一个目录，.golden/ 是期望输出）
 ```
 
-**依赖方向**：`exec → plan → rule → money/apportion`。反向 import 一律拒绝。
+> 注意：Go 参考实现**不在本仓库**——它留在原 Go 工程里，只在冻结语料时被 `tools/freeze_golden.sh`
+> 当作一次性编译器调用一次。冻结后语料本身（`.golden/`）就是 oracle，Go 不再被需要。属性测试
+> 的副证人（W2）在 `allocation-kernel` 的 `ApportionPropertiesTest`，不在 conformance 模块。
 
 ---
 
@@ -120,11 +124,8 @@ mvn -q -pl allocation-kernel test
 # 差分测试（golden 语料）
 mvn -q -pl allocation-conformance test
 
-# 只跑某一类语料
-mvn -q -pl allocation-conformance test -Dgolden.filter="c02*"
-
-# 属性测试（jqwik，会跑几千个随机用例）
-mvn -q -pl allocation-conformance test -Dtest=ApportionProperties
+# 属性测试（jqwik，含百万随机输入 vs 独立 BigInteger oracle）
+mvn -q -pl allocation-kernel test -Dtest=ApportionPropertiesTest
 
 # 性能基线
 mvn -q -pl allocation-bench jmh:run -Dbench=Apportion
@@ -145,7 +146,7 @@ mvn -q -pl allocation-kernel dependency:list | grep -E "spring|mybatis|jakarta" 
 | 裸 `a * b`、`a + b` 作用于金额/权重 | 静默溢出 |
 | `parallelStream().forEach()` 写结果 | 结果不可复现 |
 | `HashMap` 遍历顺序影响输出 | 不可复现 |
-| 为了让测试通过而改 `golden/**/expected/` | 篡改证据 |
+| 为了让测试通过而改 `corpus/**/.golden/` | 篡改证据 |
 | 在 `allocation-kernel` 里 import Spring/MyBatis | 破坏内核独立性 |
 | 写前端/页面/菜单 | 超出范围（`Constitution` 第十三条） |
 | 用 Lombok | 隐藏 `equals/hashCode` 语义 |
@@ -156,7 +157,7 @@ mvn -q -pl allocation-kernel dependency:list | grep -E "spring|mybatis|jakarta" 
 
 ## 6. 每次会话结束必须产出（交接）
 
-在 `docs/java-port/reports/` 下追加或更新当日文件：
+在 `docs/reports/` 下追加或更新当日文件：
 
 ```markdown
 ## <日期> · <阶段> · <一句话主题>
@@ -185,9 +186,9 @@ mvn -q -pl allocation-kernel dependency:list | grep -E "spring|mybatis|jakarta" 
 ## 7. 遇到不确定时的处理顺序
 
 1. **先查 `SEMANTICS.md`** —— 80% 的疑问里面已经有答案。
-2. **再查 Go 源码**（`legacy/internal/engine/`）—— 它是行为的事实来源。
-3. **跑一次 Go 二进制**看实际输出 —— 比我猜更可靠。
-4. **仍然不确定** → 写成最小用例，冻结进 `golden/`，并在报告里标注 `[待确认]`。
+2. **再查 Go 源码**（原 Go 工程 `internal/engine/`，不在本仓库）—— 它是行为的事实来源。
+3. **跑一次 Go 二进制**看实际输出（通过 `tools/freeze_golden.sh`）—— 比我猜更可靠。
+4. **仍然不确定** → 写成最小用例，冻结进 `allocation-conformance/src/test/resources/corpus/`，并在报告里标注 `[待确认]`。
 5. **绝对不要**用"我觉得应该是这样"来定金额语义。
 
 ---

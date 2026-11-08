@@ -133,7 +133,7 @@ spring-boot-starter  →  kernel
 任何行为变更，必须按此顺序：
 
 ```
-1. 修改 docs/java-port/SEMANTICS.md    （PR 标题带 [SEMANTICS]）
+1. 修改 docs/SEMANTICS.md    （PR 标题带 [SEMANTICS]）
 2. 修改/新增黄金语料                    （带期望输出的 .golden 文件）
 3. 修改代码
 4. 差分测试全绿
@@ -194,7 +194,7 @@ spring-boot-starter  →  kernel
 以下情况视为**功能未完成**：
 
 - `SEMANTICS.md` 未同步
-- 新增配置项未写入 `docs/java-port/API.md`
+- 新增配置项未写入 `docs/API.md`
 - 新增错误码未登记
 - 迁移/兼容说明缺失
 
