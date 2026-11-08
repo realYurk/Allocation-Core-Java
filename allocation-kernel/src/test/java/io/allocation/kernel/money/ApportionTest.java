@@ -1,6 +1,7 @@
 package io.allocation.kernel.money;
 
 import io.allocation.kernel.AllocationException;
+import io.allocation.kernel.coord.Utf8Order;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -210,7 +211,7 @@ class ApportionTest {
             if (cmp != 0) {
                 return positive ? -cmp : cmp;
             }
-            return Integer.compare(a, b);
+            return Utf8Order.compare(ids[a], ids[b]);
         });
         int magnitude = Math.abs(res);
         for (int i = 0; i < magnitude; i++) {
