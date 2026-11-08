@@ -228,6 +228,78 @@ public final class Apportion {
         }
     }
 
+    /**
+     * The settlement order for a split, plus the residual that created it.
+     *
+     * @param rank     per candidate, {@code 0} being first in line for a residual unit
+     * @param residual units left over after truncation, positive or negative
+     */
+    public record Settlement(int[] rank, long residual) {
+    }
+
+    /**
+     * Returns where each entry sits in the settlement order, without allocating anything.
+     *
+     * <p>The order is the tie-break policy itself, so any explanation shown to a user has to come from
+     * here rather than from a second copy of the rule. A rank of {@code k} means the entry is the
+     * {@code k}-th candidate to receive a residual unit.
+     *
+     * <p>Computed with {@link BigInteger} on purpose: this is a reporting path, it runs once per
+     * explanation, and exactness matters more than the last few nanoseconds.
+     *
+     * @param total     the amount being split, used only to determine the sign of the residual
+     * @param weights   driver weights, one per candidate
+     * @param identities tie-break identities, one per candidate
+     */
+    public static Settlement settlement(long total, long[] weights, String[] identities, boolean allowSigned) {
+        int n = weights.length;
+        if (identities.length != n) {
+            throw new AllocationException(ErrorCode.RULE_INVALID, "weight and identity counts differ");
+        }
+        BigInteger denominator = BigInteger.ZERO;
+        for (int i = 0; i < n; i++) {
+            if (weights[i] < 0 && !allowSigned) {
+                throw new AllocationException(ErrorCode.RULE_INVALID,
+                        "negative driver without explicit permission");
+            }
+            denominator = denominator.add(BigInteger.valueOf(weights[i]));
+        }
+        if (denominator.signum() <= 0) {
+            throw new AllocationException(ErrorCode.RULE_INVALID, "driver denominator must be positive");
+        }
+        BigInteger bigTotal = BigInteger.valueOf(total);
+        BigInteger[] remainders = new BigInteger[n];
+        long truncated = 0L;
+        for (int i = 0; i < n; i++) {
+            BigInteger[] qr = bigTotal.multiply(BigInteger.valueOf(weights[i])).divideAndRemainder(denominator);
+            truncated = addChecked(truncated, qr[0].longValueExact());
+            remainders[i] = qr[1];
+        }
+        long residual = Overflow.subExact(total, truncated);
+        boolean positive = residual > 0;
+        int[] order = new int[n];
+        for (int i = 0; i < n; i++) {
+            order[i] = i;
+        }
+        IndexSort.sort(order, n, (a, b) -> {
+            int cmp = remainders[a].compareTo(remainders[b]);
+            if (cmp != 0) {
+                return positive ? -cmp : cmp;
+            }
+            return Utf8Order.compare(identities[a], identities[b]);
+        });
+        int[] rank = new int[n];
+        for (int position = 0; position < n; position++) {
+            rank[order[position]] = position;
+        }
+        return new Settlement(rank, residual);
+    }
+
+    /** Convenience view of {@link #settlement} for callers that only need the order. */
+    public static int[] settlementOrder(long total, long[] weights, String[] identities, boolean allowSigned) {
+        return settlement(total, weights, identities, allowSigned).rank();
+    }
+
     /** Residual bound assertion used by callers that verify a split without recomputing it. */
     public static boolean isBalanced(long total, long[] allocations) {
         long sum = 0L;
