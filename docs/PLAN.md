@@ -220,7 +220,8 @@ MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation
 > 另已完成：`AllocationAuthorizer`（装饰器，先检查后做事，403 不泄露 run 是否存在）与 `AllocationListener`
 > （运行级 sealed 事件，池级仍走 `Progress`），见 D-023；`allocation-example` 作为宿主证据（D-025）；
 > **Micrometer 指标**（`AllocationMetrics`，作为监听器上报 10 个 run 级指标，有 `MeterRegistry` 自动生效，
-> 见 §5.1 与 D-027；多监听器组合见 D-028）。
+> 见 §5.1 与 D-027；多监听器组合见 D-028）、**`AmountSource.Custom`**（宿主把自己的 `AllocationInput` 交给
+> `submit`，数据在库里的宿主不必再导 CSV；带幂等键而输入没有 fingerprint 时拒绝为 `ALLOC_013`，见 D-029）。
 > **未做（有意）**：`@EnableAllocation`（自动配置已足够，多一个注解只会多一种启用方式）、OpenAPI 文档生成
 > （契约文档是 `docs/API.md`，机器可读版本等契约稳定后一次性生成）、`TenantProvider` / `DataScopeProvider`
 > （多租户要先改 schema：`tenant_id` + 复合唯一键 + 全部查询带租户条件，见 D-023 末尾）、

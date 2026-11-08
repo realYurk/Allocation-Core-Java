@@ -166,6 +166,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         String requestDigest = requestDigest(rule, spec, command.source(), input);
         String key = command.idempotencyKey();
         if (key != null) {
+            requireFingerprints(spec, command.source(), input, key);
             Optional<RunRepository.RunRecord> existing = repository.findByIdempotencyKey(key);
             if (existing.isPresent()) {
                 RunRepository.RunRecord record = existing.get();
@@ -480,8 +481,63 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         if (source instanceof AmountSource.Csv csv) {
             return CsvInput.of(csv.baseDirectory(), spec);
         }
+        if (source instanceof AmountSource.Custom custom) {
+            return custom.input();
+        }
         AmountSource.InMemory memory = (AmountSource.InMemory) source;
         return previewInput(rule, spec, singleAmountDataset(spec), memory.rows());
+    }
+
+    /**
+     * Refuses an idempotency key on an input that cannot say what it read.
+     *
+     * <p>Only custom inputs are checked, and only when a key is present: the two built-in sources always
+     * have something to hash (a file, or the caller's rows), so this cannot change their behaviour. The
+     * alternative — recording {@code absent} and answering the retry anyway — is the defect D-016 was
+     * written about, one layer out: a submission whose identity was never established, reported as a
+     * replay of a run that read different data.
+     *
+     * <p>A name is collected per dataset rather than throwing on the first miss, because a host debugging
+     * this wants the whole list in one response.
+     */
+    private static void requireFingerprints(AllocationSpec spec, AmountSource source, AllocationInput input,
+                                            String key) {
+        if (!(source instanceof AmountSource.Custom)) {
+            return;
+        }
+        List<String> missing = new ArrayList<>();
+        for (String dataset : spec.amountDatasets().keySet()) {
+            if (input.fingerprint(dataset, null) == null) {
+                missing.add(dataset);
+            }
+        }
+        for (String[] reference : driverReferences(spec)) {
+            if (input.fingerprint(reference[0], reference[1]) == null) {
+                missing.add(reference[0] + "." + reference[1]);
+            }
+        }
+        if (!missing.isEmpty()) {
+            throw new AllocationException(ErrorCode.IDEMPOTENCY_UNVERIFIABLE,
+                    "idempotency key " + key + " needs a fingerprint for every dataset this rule reads; "
+                            + "the custom input returned none for " + String.join(", ", missing),
+                    null, null, null, null);
+        }
+    }
+
+    /** Every {@code (dataset, weightField)} pair the rule's allocations read, deduplicated and sorted. */
+    private static List<String[]> driverReferences(AllocationSpec spec) {
+        TreeSet<String> references = new TreeSet<>();
+        for (StageSpec stage : spec.stages()) {
+            for (AllocationRule allocation : stage.allocations()) {
+                references.add(allocation.driverDataset() + '\u0000' + allocation.weightField());
+            }
+        }
+        List<String[]> out = new ArrayList<>(references.size());
+        for (String reference : references) {
+            int split = reference.indexOf('\u0000');
+            out.add(new String[]{reference.substring(0, split), reference.substring(split + 1)});
+        }
+        return out;
     }
 
     private static AllocationInput previewInput(RuleResolver.RuleDocument rule, AllocationSpec spec,

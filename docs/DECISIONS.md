@@ -666,3 +666,39 @@ PROBE metrics beans: []
 **这条不再靠文档保证**：`ExampleApplicationTest` 断言示例应用（真实的 Boot 应用、真实的 actuator）里
 `/actuator/metrics/allocation.run.finished?tag=outcome:published` 的计数是 1。上面那个 `metrics beans: []`
 的场景，现在会让 `mvn verify` 变红。
+
+---
+
+## D-029 `AmountSource.Custom`：把"实现自己的输入"从建议变成通道
+
+**状态**：已接受
+
+**背景**：`docs/API.md` §6 一直写着"宿主自己实现的输入（JDBC 游标、对象存储流等）应当覆盖
+`forEachAmount`/`forEachDriver`"，§1.1 还画了一个 `record Jdbc(String sql, Object... params)` 的接口草图。两处都是
+**纸面上的**：`AmountSource` 是 `sealed`，只 permit `Csv` 与 `InMemory`，而 `RunCommand` 只接受 `AmountSource`。
+也就是说，一个数据在 MySQL 里的若依宿主，能走的只有两条路：把表导成 CSV，或者把整表 POST 成内存行。两条都在
+"数据有一千万行"时崩塌，而这正是这个引擎存在的场景。
+
+一个 sealed 层次恰好只有一个好处：新增变体时编译器会点出所有需要处理的地方。反面是，**没有变体的能力就是不存在
+的能力**，即使文档里写了三遍。
+
+**决策**：新增 `AmountSource.Custom(AllocationInput input)`，`inputFor` 直接把它交给执行器。宿主因此可以写一个
+游标输入（MyBatis `ResultHandler`、`Stream<Row>`、S3 分块），执行器照旧只调用流式方法。
+
+**同一条决策里最不显然的部分，是 ALLOC_013**。幂等键是一个承诺："同 key 即同数据"。引擎兑现它的方式是
+`requestDigest`：规则字节 + 每个数据集的 `fingerprint`。自定义输入可以返回 `null` 作为 fingerprint（接口一直
+允许），于是摘要里写 `absent`——此时同 key、同规则、**不同数据**的第二次提交会被判定为 replay，返回上一次的
+数字。这是"错误答案伪装成缓存命中"，比报错难查一个数量级，而且它与 D-016 修掉的"哈希目录不哈希内容"是同一个
+bug 换了层皮。
+
+所以：**带 key 且没有 fingerprint 的自定义输入，直接拒绝（`ALLOC_013`，HTTP 422）**；不带 key 时照常运行。
+选择"拒绝"而不是"接受并记 absent"，是因为前者会让宿主在一分钟内知道要做的事，后者会让宿主在三个月后知道。
+这条检查只对 `Custom` 生效——`Csv` 与 `InMemory` 永远有东西可哈希，行为一分不变。
+
+**已知代价**：一条规则读几个数据集，宿主就要为几个数据集提供 fingerprint；要做到"内容摘要"通常意味着第二次
+扫描（或维护一个随写更新的摘要列）。这是宿主的选择题——`count+sum+max(updated_at)` 已经在绝大多数业务表上够用
+——但引擎不会替它选，也不会在它没选的时候假装一切正常。
+
+**同时修掉的文档债**：§1.1 里那个从未存在过的 `record Jdbc(String sql, Object... params)` 被删掉了，换成真实的三
+个变体加一个 §1.2 的完整示例（Mapper 输入、行序为什么必须稳定、重量为什么是 10^6、为什么 `readAmounts` 最好抛
+异常）。文档里出现一个不存在的类型，比少写一段说明更有害：读者会照着它写代码，然后以为是自己的问题。

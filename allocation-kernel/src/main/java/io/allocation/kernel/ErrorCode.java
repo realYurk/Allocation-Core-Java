@@ -47,7 +47,17 @@ public enum ErrorCode {
      * resubmitted. The code exists so an operator can tell "we lost the process" from "the data was
      * wrong" without reading a message.
      */
-    ABANDONED("ALLOC_012");
+    ABANDONED("ALLOC_012"),
+
+    /**
+     * An idempotency key was used with a custom input that cannot say what data it read.
+     *
+     * <p>Refusing is the only honest answer: the key promises "same key, same data", and an input without
+     * a fingerprint cannot keep that promise, so the alternative is returning a previous run's numbers for
+     * a table that has since changed. Hosts that need a key implement {@code fingerprint}; hosts that do
+     * not need a key do not implement anything.
+     */
+    IDEMPOTENCY_UNVERIFIABLE("ALLOC_013");
 
     private final String code;
 

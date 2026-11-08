@@ -10,6 +10,11 @@ import java.util.function.Consumer;
  * engine serves a unit test, a nightly batch, and a Spring request. Implementations must return rows in
  * a stable order — file order, primary-key order, whatever — because row identifiers embed the ordinal
  * of rows that carry no explicit {@code row_id}.
+ *
+ * <p>An implementation of this interface is what a host passes to the service layer as {@link
+ * io.allocation.kernel.service.AmountSource.Custom}. Override the two streaming methods if the data is
+ * bigger than the heap: this is the only place where "read one row" and "read the table" differ by an
+ * order of magnitude in memory.
  */
 public interface AllocationInput {
 

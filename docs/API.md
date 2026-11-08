@@ -72,15 +72,64 @@ public record Money(long units, int scale) {}          // 内核唯一金额类�
 public record AmountRow(Map<String,String> coord, Money amount) {}
 
 public sealed interface AmountSource {
-    record Csv(Path path)                          implements AmountSource {}
-    record Jdbc(String sql, Object... params)      implements AmountSource {}
-    record InMemory(List<AmountRow> rows)          implements AmountSource {}
+    record Csv(Path baseDirectory)                     implements AmountSource {}
+    record InMemory(List<AmountRow> rows)              implements AmountSource {}
+    record Custom(AllocationInput input)               implements AmountSource {}   // 见 §1.2
 }
 
 public record Preview(List<AllocatedLine> lines, Conservation conservation, List<Warning> warnings) {}
 public record AllocatedLine(Map<String,String> coord, Money amount, ShareTrace trace) {}
 public record ShareTrace(Money poolAmount, long weight, long denominator, int remainderRank, boolean gotResidual) {}
 ```
+
+### 1.2 数据在表里：`AmountSource.Custom`
+
+宿主的数据通常不在 CSV 里。`AmountSource.Custom` 让宿主把自己实现的 `AllocationInput` 交给 `submit`，
+并且**只**走流式方法——`forEachAmount` / `forEachDriver`——所以内存是"一行"，不是"一张表"：
+
+```java
+public final class MapperInput implements AllocationInput {
+
+    private final AmountMapper mapper;      // 若依里就是你的 @Mapper
+    private final String where;
+
+    @Override public List<Row> readAmounts(String dataset) { throw new UnsupportedOperationException(); }
+
+    @Override public void forEachAmount(String dataset, Consumer<Row> consumer) {
+        mapper.streamAmounts(where, rs -> consumer.accept(new Row(
+                new Coord(new String[]{rs.getString("plant"), rs.getString("account")}),
+                Decimal.parseScaled(rs.getString("amount"), 2),
+                new String[]{rs.getString("id")})));
+    }
+
+    @Override public List<DriverRow> readDrivers(String dataset, String weightField) { throw new UnsupportedOperationException(); }
+
+    @Override public void forEachDriver(String dataset, String weightField, Consumer<DriverRow> consumer) {
+        mapper.streamWeights(where, weightField, rs -> consumer.accept(new DriverRow(
+                new Coord(new String[]{rs.getString("plant"), rs.getString("account")}),
+                Decimal.parseScaled(rs.getString("weight"), 6))));
+    }
+
+    /** 没有它就不能带 idempotencyKey（ALLOC_013）。空实现也行，只要它随数据变。 */
+    @Override public String fingerprint(String dataset, String weightField) {
+        return mapper.contentDigest(where);   // 例如 count+sum+max(updated_at) 的 sha256
+    }
+}
+
+allocation.submit(RunCommand.builder()
+        .ruleCode("cost-allocation")
+        .source(new AmountSource.Custom(new MapperInput(mapper, "period = '2026-01'")))
+        .build());
+```
+
+三条必须知道的约定：
+
+1. **`readAmounts` / `readDrivers` 不会被调用**，实现成抛异常是最好的写法——它能在任何一次回归里立刻暴露"有人把流式路径改回了读全表"。
+2. **行序必须稳定**（主键序、`ORDER BY` 都行）。结果里 `row_id` 会嵌入行序号，顺序变了行号就变，语料对账会红。
+3. **重量单位是 10^6**（`DriverRow.weight` 是缩放整数），金额是 10^-precision 的缩放整数，二者都不接受 `double`。
+
+`AmountSource.Custom` 只在 Java 侧可用：HTTP 调用方拿不到 JVM 对象，所以 `POST /allocation/runs` 仍然只接受
+`csv` 与 `memory`（§2.2）。这是有意的边界，不是遗漏。
 
 ---
 
@@ -208,6 +257,7 @@ public record ShareTrace(Money poolAmount, long weight, long denominator, int re
 | `ALLOC_010` | 403 | 无权限 | `AllocationAuthorizer` 拒绝 |
 | `ALLOC_011` | 409 | 已取消 | 调用方取消；不是故障，run 状态为 `CANCELLED` |
 | `ALLOC_012` | 409 | 进程中断 | 持有该 run 的进程在完成前退出；`RunRecovery.abandonInterrupted` 把 `RUNNING`/`PENDING` 记录钉成 `FAILED` + 本码。**不会作为 HTTP 错误返回**——它是 run 记录上的失败原因，调用方从 §2.3 的 `status` 看到 `FAILED` |
+| `ALLOC_013` | 422 | 幂等键无法验证 | `AmountSource.Custom` 的输入没有返回 fingerprint，却又带了 idempotencyKey。拒绝而不是"当作一样"：同 key 不同数据时返回上一次的答案，是错误答案伪装成缓存命中（见 §1.2） |
 
 **规则**：错误响应必须含 `stageId` / `allocationId` / `poolKey`（若适用），否则视为实现不完整。
 
@@ -304,10 +354,10 @@ allocation:
 
 | 接口 | 默认实现 | 现状 | 宿主可替换 |
 |---|---|---|---|
-| `AmountSource` | 规则目录下的 CSV / 调用方内存行 | ✅ 已实现 | 数据从哪来 |
+| `AmountSource` | 规则目录下的 CSV / 调用方内存行 | ✅ 已实现 | 数据从哪来；数据在库里的宿主用 `Custom`（§1.2） |
 | `RunRepository` | 有 `DataSource` 走 JDBC，否则内存 | ✅ 已实现 | 存储实现（MyBatis Mapper 亦可） |
 | `RuleResolver` | `DirectoryRuleResolver`（`allocation.rules-directory`） | ✅ 已实现 | 规则从库/配置中心来 |
-| `AllocationInput` | `CsvInput` | ✅ 已实现 | 覆盖流式的 `forEachAmount` / `forEachDriver` |
+| `AllocationInput` | `CsvInput` | ✅ 已实现 | 覆盖流式的 `forEachAmount` / `forEachDriver`，用 `AmountSource.Custom` 交给 `submit` |
 | `Executor.Progress` | 无操作 | ✅ 已实现 | 运行期进度（池数/行数）的外部上报 |
 | `AllocationListener` | 无操作 | ✅ 已实现 | 运行事件（提交/开始/发布/失败/取消）；**可以声明多个**，按 Bean 顺序组合 |
 | `AllocationMetrics` | 有 `MeterRegistry` 时自动注册 | ✅ 已实现（`allocation-spring`） | 见 §5.1；宿主声明同类型 Bean 即可接管 |
@@ -335,7 +385,8 @@ SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应
 > **内核级输入契约（已实现）**：`AllocationInput` 除了返回列表的 `readAmounts` / `readDrivers`，还提供
 > `forEachAmount(dataset, consumer)` 与 `forEachDriver(dataset, weightField, consumer)`。执行器只走流式
 > 这两条。宿主自己实现的输入（JDBC 游标、对象存储流等）**应当覆盖它们**——默认实现会把整表读进 `List`，
-> 正确性一分不差，堆会差一个数量级。金额行流式读入后进可溢写的 `RowStore`；驱动行流式读入后进列式
+> 正确性一分不差，堆会差一个数量级。这样的输入通过 `AmountSource.Custom` 交给 `submit`（§1.2）；在这条
+> 通道补上之前，§6 的这句建议在 Java 侧是做不到的，因为 `AmountSource` 只接受 CSV 目录和已经解码好的行列表。金额行流式读入后进可溢写的 `RowStore`；驱动行流式读入后进列式
 > `DriverTable`（驱动不能溢写，因为分摊要随机访问权重）。
 > 运行期内存预算：`Executor.Options.maxRowsInMemory`（默认 250,000 行，超过即溢写临时文件），
 > 命令行对应 `--max-rows N`。

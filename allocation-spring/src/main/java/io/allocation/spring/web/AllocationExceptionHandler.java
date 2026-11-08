@@ -90,7 +90,8 @@ public class AllocationExceptionHandler {
     public static HttpStatus statusOf(ErrorCode code) {
         return switch (code) {
             case RULE_INVALID, AMOUNT_OUT_OF_RANGE -> HttpStatus.BAD_REQUEST;
-            case CONSERVATION_FAILED, NO_ELIGIBLE_DRIVERS -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case CONSERVATION_FAILED, NO_ELIGIBLE_DRIVERS, IDEMPOTENCY_UNVERIFIABLE ->
+                    HttpStatus.UNPROCESSABLE_ENTITY;
             case IDEMPOTENCY_CONFLICT, RESULT_NOT_PUBLISHED, CANCELLED, ABANDONED -> HttpStatus.CONFLICT;
             case REQUEST_TOO_LARGE -> HttpStatus.PAYLOAD_TOO_LARGE;
             case TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
