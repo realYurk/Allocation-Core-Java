@@ -65,8 +65,10 @@ jobs:
 
       - name: run
         run: |
-          java -jar allocation-bench/target/allocation-bench-*.jar \
-            -f 1 -wi 3 -i 5 -rf json -rff jmh-$(date +%Y%m%d).json
+          # Not a bare glob: the shade plugin also leaves an `original-` jar in target/, and a second
+          # argument would be read by JMH as a benchmark filter.
+          JAR=$(ls allocation-bench/target/allocation-bench-*.jar | grep -v original | head -1)
+          java -jar "$JAR" -f 1 -wi 3 -i 5 -rf json -rff "jmh-$(date +%Y%m%d).json"
 
       - name: compare with the checked-in baseline (informational)
         run: |
