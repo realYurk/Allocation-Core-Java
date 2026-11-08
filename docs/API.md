@@ -309,6 +309,9 @@ SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应
 
 ## 7. 接入若依的 30 分钟清单
 
+> 想先看它长什么样：`mvn -pl allocation-example spring-boot:run`。那个工程是一个包名不覆盖本组件的宿主应用，
+> 空配置启动、两阶段规则、启动即打印总额与决策链，并对一份冻结结果做对账（`allocation-example/README.md`）。
+
 1. `mvn install` 组件（或用企业私服坐标）
 2. 在业务模块 `pom.xml` 加入 `allocation-spring`（自带 `spring-boot-starter-web` 传递依赖；只要引擎不要
    REST，就只引 `allocation-kernel`）

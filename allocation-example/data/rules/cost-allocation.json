@@ -1,0 +1,56 @@
+{
+  "schema": "allocation-ir/2.0",
+  "rounding_policy": "LARGEST_REMAINDER_IDENTITY",
+  "name": "manufacturing overhead, two passes",
+  "precision": 2,
+  "dimensions": ["period", "plant", "dept", "account"],
+  "immutable_dimensions": ["period"],
+  "hierarchies": {},
+  "datasets": {
+    "amounts": {
+      "amounts": "amounts.csv"
+    },
+    "drivers": {
+      "dept-headcount": "dept-headcount.csv",
+      "account-weight": "account-weight.csv"
+    }
+  },
+  "stages": [
+    {
+      "id": "to-dept",
+      "inputs": [{"from": "amounts", "share": "1"}],
+      "source": {
+        "grouping": {"period": "AS_IS", "plant": "AS_IS", "dept": "TOTAL", "account": "AS_IS"},
+        "filters": {}
+      },
+      "target": {
+        "period": {"mode": "SOURCE"},
+        "plant": {"mode": "SOURCE"},
+        "dept": {"mode": "INCLUDE", "include": ["ASSEMBLY", "PAINT", "PACKAGING"]},
+        "account": {"mode": "SOURCE"}
+      },
+      "conservation_keys": ["period", "plant", "account"],
+      "allocations": [
+        {"id": "by-headcount", "share": "1", "driver_dataset": "dept-headcount", "weight_field": "headcount"}
+      ]
+    },
+    {
+      "id": "to-account",
+      "inputs": [{"from": "to-dept", "share": "1"}],
+      "source": {
+        "grouping": {"period": "AS_IS", "plant": "AS_IS", "dept": "AS_IS", "account": "TOTAL"},
+        "filters": {}
+      },
+      "target": {
+        "period": {"mode": "SOURCE"},
+        "plant": {"mode": "SOURCE"},
+        "dept": {"mode": "SOURCE"},
+        "account": {"mode": "INCLUDE", "include": ["MATERIAL", "LABOUR", "ENERGY"]}
+      },
+      "conservation_keys": ["period", "plant", "dept"],
+      "allocations": [
+        {"id": "by-account", "share": "1", "driver_dataset": "account-weight", "weight_field": "weight"}
+      ]
+    }
+  ]
+}

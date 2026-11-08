@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.allocation</groupId>
+    <artifactId>allocation-parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>allocation-example</artifactId>
+  <name>allocation-example</name>
+  <description>A runnable host application: two-pass overhead allocation, zero configuration, REST + demo.</description>
+
+  <!--
+    This module is the acceptance test for "drop it into any Spring backend and it works": its package is
+    io.allocation.example, so its component scan finds none of the starter's classes. Everything it uses
+    arrives through AutoConfiguration.imports. If the starter ever depended on being scanned, this module
+    would stop working before a customer found out.
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>io.allocation</groupId>
+      <artifactId>allocation-spring</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <version>${spring-boot.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring-boot.version}</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>

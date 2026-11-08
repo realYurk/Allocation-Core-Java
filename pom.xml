@@ -30,6 +30,7 @@
     <module>allocation-conformance</module>
     <module>allocation-spring</module>
     <module>allocation-bench</module>
+    <module>allocation-example</module>
   </modules>
 
   <dependencyManagement>

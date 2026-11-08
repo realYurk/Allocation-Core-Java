@@ -43,15 +43,19 @@ allocation-java/
 │       └── ddl/          mysql8 / postgres / sqlite（resource，由 SchemaTest 实际执行）
 ├── allocation-conformance/          测试专用：golden 语料 runner + 属性测试（129 个用例）
 ├── allocation-spring/               Spring Boot 3.2 starter + REST（依赖方向只指向 kernel）
-└── allocation-bench/                JMH 基线（只依赖 kernel；不进运行时，不进宿主 classpath）
-    ├── AllocationProperties / AllocationAutoConfiguration / AllocationWebConfiguration
-    └── web/              AllocationController, ApiResponse, Api, ApiMapper, AllocationExceptionHandler
+│   ├── AllocationProperties / AllocationAutoConfiguration / AllocationWebConfiguration
+│   ├── AllocationAuthorizer / AuthorizingAllocationTemplate   （边界鉴权，见 D-023）
+│   └── web/              AllocationController, ApiResponse, Api, ApiMapper, AllocationExceptionHandler
+├── allocation-bench/                JMH 基线（只依赖 kernel；不进运行时，不进宿主 classpath）
+└── allocation-example/              可运行的宿主工程（包名 io.allocation.example，见 D-025）
+    ├── data/             规则 + 两份 CSV + 冻结的参考结果
+    └── DemoRunner        启动即跑一遍、打印决策链、对账
 ```
 
 **与初始计划的差异（刻意合并）**：`allocation-rest` 并入 `allocation-spring`——REST 层离开 starter 就无法装配，
 拆成两个 jar 只会让宿主多引一个依赖。`allocation-persistence-mybatis` 不做：JDBC 实现已零依赖满足需求，
-MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation-example` 的位置由 `allocation-spring` 的
-测试与 `docs/API.md` 的接入清单代替。
+MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation-example` 保留且已实现：它是"宿主不扫描本组件
+的包也能用"这条承诺的唯一证据（D-025）。
 
 **硬约束**：`allocation-kernel` 的 `pom.xml` 里只有 JUnit（test scope）。CI 有检查。
 
@@ -213,9 +217,12 @@ MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation
 > 错误码 → HTTP 一张表（`AllocationExceptionHandler`，`stageId`/`allocationId`/`poolKey` 随响应返回）、
 > 协作式取消（`cancel(runId)`，池批次边界生效，`CANCELLED` 为独立终态）、
 > **运行中实时进度**（`Executor.Progress` 回调 + `status()` 双来源，见 D-021）。
+> 另已完成：`AllocationAuthorizer`（装饰器，先检查后做事，403 不泄露 run 是否存在）与 `AllocationListener`
+> （运行级 sealed 事件，池级仍走 `Progress`），见 D-023；`allocation-example` 作为宿主证据（D-025）。
 > **未做（有意）**：`@EnableAllocation`（自动配置已足够，多一个注解只会多一种启用方式）、OpenAPI 文档生成
-> （契约文档是 `docs/API.md`，机器可读版本等契约稳定后一次性生成）、`AllocationAuthorizer` / `TenantProvider` SPI
-> （宿主接若依 `@PreAuthorize` 时才有意义，先留接口形状）、Micrometer 指标、`examples/ruoyi-smoke.sh`。
+> （契约文档是 `docs/API.md`，机器可读版本等契约稳定后一次性生成）、`TenantProvider` / `DataScopeProvider`
+> （多租户要先改 schema：`tenant_id` + 复合唯一键 + 全部查询带租户条件，见 D-023 末尾）、Micrometer 指标、
+> `examples/ruoyi-smoke.sh`（`allocation-example` 覆盖了它的功能面，脚本形式留待真实若依工程联调时再写）。
 
 | 项 | 内容 |
 |---|---|

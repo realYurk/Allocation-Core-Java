@@ -1,0 +1,12 @@
+# Everything the engine needs is these two directories. No workers, no queue size, no limits: every
+# remaining property has a default that is correct for a single-process deployment (docs/API.md §5).
+allocation:
+  working-directory: ./target/example-work
+  rules-directory: ./data/rules
+
+server:
+  port: 8080
+
+logging:
+  level:
+    io.allocation: INFO

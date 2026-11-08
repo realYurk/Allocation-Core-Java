@@ -46,6 +46,7 @@ Full ruleset: [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md).
 | `allocation-conformance` | golden corpus + differential harness (the acceptance gate) | kernel, JUnit |
 | `allocation-spring` | Spring Boot 3.2 starter + REST binding (`/allocation/**`) | kernel, spring-boot-web |
 | `allocation-bench` | JMH baselines for the hot path; never on a host's classpath | kernel, JMH |
+| `allocation-example` | a runnable host app: two-pass overhead allocation, zero config, demo at startup | spring, boot-web |
 
 ## Requirements
 
@@ -58,9 +59,15 @@ Full ruleset: [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md).
 mvn verify
 ```
 
-That is the whole gate: 228 kernel tests, 129 golden-corpus tests, and 31 starter tests including one
-that boots a real application on a random port and calls the REST contract over HTTP. Update a number in
-`docs/` only after this passes.
+That is the whole gate: 236 kernel tests, 129 golden-corpus tests, 38 starter tests and 3 example tests,
+including two that boot a real application on a random port and call the REST contract over HTTP. Update a
+number in `docs/` only after this passes.
+
+Want to see it work before reading anything?
+
+```bash
+mvn -pl allocation-example spring-boot:run
+```
 
 ```bash
 mvn -q -pl allocation-bench -am package   # benchmarks
@@ -78,6 +85,8 @@ java -jar allocation-bench/target/allocation-bench-*.jar -f 1 -wi 3 -i 5
 | Scale: 10M amount rows in a 64MB heap | done (`docs/PERF.md`) |
 | Service layer: preview / submit / status / result / explain / reconcile / cancel | done, with live progress |
 | Spring starter + REST contract (`docs/API.md` §2) | done, verified over a real socket |
+| Runnable example (`allocation-example`) | done — zero config, two stages, reconciles against a frozen file |
+| Pluggable authorisation, run lifecycle events | done (`AllocationAuthorizer`, `AllocationListener`) |
 | JMH baseline + regression comparison | done (`docs/PERF.md` §7) |
 | Checkpoint / resume after interruption | **not done** — an interrupted run is marked `FAILED` (`ALLOC_012`), never resumed |
 | Ten-million *target* driver tables | measured: 10,000,000 driver rows need ~1.5GB of heap (17.2s); below 1.5GB the run does not finish |
