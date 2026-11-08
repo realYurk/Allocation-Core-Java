@@ -269,6 +269,7 @@ allocation.submit(RunCommand.builder()
 | `ALLOC_011` | 409 | 已取消 | 调用方取消；不是故障，run 状态为 `CANCELLED` |
 | `ALLOC_012` | 409 | 进程中断 | 持有该 run 的进程在完成前退出；`RunRecovery.abandonInterrupted` 把 `RUNNING`/`PENDING` 记录钉成 `FAILED` + 本码。**不会作为 HTTP 错误返回**——它是 run 记录上的失败原因，调用方从 §2.3 的 `status` 看到 `FAILED` |
 | `ALLOC_013` | 422 | 幂等键无法验证 | `AmountSource.Custom` 的输入没有返回 fingerprint，却又带了 idempotencyKey。拒绝而不是"当作一样"：同 key 不同数据时返回上一次的答案，是错误答案伪装成缓存命中（见 §1.2） |
+| `ALLOC_014` | 404 | 没有这个 run | id 不存在，**或者它属于另一个租户**（§5.2）。两者同一个码：告诉调用方"不是你的"就等于确认这个 id 是真的，而 run id 是陌生人与一家公司成本明细之间唯一的东西。在本次之前的版本里这种情况返回 `400` + `ALLOC_001`，那是把"找不到"说成了"你的规则有问题" |
 
 **规则**：错误响应必须含 `stageId` / `allocationId` / `poolKey`（若适用），否则视为实现不完整。
 
@@ -294,12 +295,25 @@ DDL 是代码，只保留一份，放在 `ddl/`：
 坐标在 `allocation_result.coordinate` 里存成**一个 JSON 数组**，而不是每个维度一列：规则可以声明
 1..30 个维度，固定列集不存在；存引擎自己的规范键，读回来的字符串和现在算出来的逐字节相同。
 
-**金额约定**：所有 `*_amount` 列都是「10^-precision 个最小单位」的整数，precision 来自规则（0..6）。
-`123456` 在 precision=2 时表示 `1234.56`。用 `BIGINT` 而不是 `DECIMAL`，是为了让数据库里存的值和
+**旧库升级**（`tenant_id` 之前建过表的）：`ALTER TABLE allocation_run ADD COLUMN tenant_id VARCHAR(64) NOT NULL
+DEFAULT ''`，再把 `idempotency_key` 上的唯一键换成 `(tenant_id, idempotency_key)`
+（MySQL：`ALTER TABLE allocation_run DROP INDEX uk_idem, ADD UNIQUE KEY uk_idem (tenant_id, idempotency_key)`；
+PostgreSQL 的旧约束名是 `allocation_run_idempotency_key_key`）。SQLite 不能改约束，重跑
+`ddl/allocation-sqlite.sql` 到新库即可。存量行的 `tenant_id` 落 `''`——它们会成为"系统上下文可见、任何租户
+不可见"的历史，这正是升级时的正确语义。
+
+**金额约定**：所有 `*_amount` 列都是「10^-precision 个最小单位」的整数，precision 来自规则（0..6）。`123456` 在 precision=2 时表示 `1234.56`。用 `BIGINT` 而不是 `DECIMAL`，是为了让数据库里存的值和
 引擎里算的值是同一个整数，搬运过程中不可能发生二次舍入。
 
-**幂等**：`allocation_run.idempotency_key` 上的唯一约束就是幂等的实现，不是缓存。并发提交同 key 时，
-数据库只允许一个赢，另一个读到赢家。
+**幂等**：`allocation_run` 上 `(tenant_id, idempotency_key)` 的唯一约束就是幂等的实现，不是缓存。并发提交
+同 key 时，数据库只允许一个赢，另一个读到赢家。键按租户隔离（§5.2）：两家公司都把月度批次叫 `2026-01`
+是正常的，第二次提交既不会失败，也不会拿到第一次的结果。
+
+**租户**：`allocation_run.tenant_id` 默认 `''`，单租户部署下永远是这个值，唯一键因此退化回
+"`idempotency_key` 唯一"，与从前逐字相同——同一份 SQL 在两种部署下都跑，没有"多租户模式"开关。子表
+（`allocation_pool` / `allocation_line` / `allocation_result` / `allocation_reconcile`）**没有** `tenant_id`：
+`run_id` 是全局主键，这些行只能经由一个 run 到达，而租户在 run 上已经判过了。需要"按租户列出 run"的
+宿主，自己加一个 `(tenant_id, create_time)` 索引——组件从不发这条查询。
 
 **幂等键的"同一次请求"由内容决定**：`request_sha256` = 规则字节 + 每个数据集的内容摘要（不是路径，
 不是大小，不是时间戳）。所以重新导出一份数字变了的 `amounts.csv` 再提交，会得到 `ALLOC_005` 而不是
@@ -359,6 +373,38 @@ allocation:
 `options.retainLines`，preview 行数上限是 `PreviewCommand.MAX_ROWS`（常量，不配置），精度上限由规则 schema
 本身约束（0..6）。
 
+### 5.2 多租户（可选，一个 Bean）
+
+```java
+@Bean
+TenantProvider allocationTenantProvider() {
+    return TenantHelper::getTenantId;   // 若依：当前登录用户的租户；没有租户上下文时返回 null
+}
+```
+
+声明之后：提交时把调用方的租户写进 `allocation_run.tenant_id`；所有"把 run id 变成 run"的路径
+（`status` / `await` / `result` / `explain` / `reconcile` / `cancel`）都带 `tenant_id = ?`；别人的 run 返回
+`ALLOC_014`（404），与不存在的 run 逐字相同。**不声明就什么都不变**：`tenant_id` 落 `''`，查询不过滤。
+
+三条必须知道的事：
+
+1. **幂等键按租户隔离**。`uk_idem` 是 `(tenant_id, idempotency_key)`：两家公司都把月度批次叫 `2026-01`
+   是正常的，第二次提交既不会冲突，也不会拿到第一次的结果。
+2. **租户只读一次，在提交线程上**。引擎的执行线程不继承你的 `ThreadLocal`，所以租户在 `submit` 那一刻
+   被取一次、写进 run 行；此后 worker 只写子表和状态，不再需要它。宿主如果自己起线程池调用 `submit`，
+   必须自己把租户带过去——和任何基于 `ThreadLocal` 的框架对异步调用的要求一样。
+3. **`null` 是系统上下文，不过滤**。批处理、启动时清理中断 run、运维查账都没有租户，也都不该被挡住。
+   要"每个请求都必须带租户"这种更严的规则，写在 `AllocationAuthorizer` 里——它看得见请求，存储层看不见。
+
+**为什么子表没有 `tenant_id`**：`run_id` 是全局主键，`allocation_pool` / `allocation_line` /
+`allocation_result` 只能经由一个 run 到达，而租户在 run 上已经判过了。给百万行明细加一列只承载可推导信息的
+字符串，是拿存储和写放大换一个已经成立的保证。
+
+**数据权限（若依 `@DataScope`）不是这里的扩展点**：它约束的是"这个人能看到哪些成本中心"，也就是**输入数据**，
+而引擎不知道某一行属于哪个部门。要在 SQL 里过滤就写在宿主的 `AllocationInput` / `AmountSource.Custom` 里
+（§1.2）——那里有部门列名，这里没有。run 级的可见性由租户（存储层）与 `AllocationAuthorizer`（边界）两层
+负责，不缺东西。
+
 ---
 
 ## 6. 扩展点（SPI）
@@ -373,10 +419,9 @@ allocation:
 | `AllocationListener` | 无操作 | ✅ 已实现 | 运行事件（提交/开始/发布/失败/取消）；**可以声明多个**，按 Bean 顺序组合 |
 | `AllocationMetrics` | 有 `MeterRegistry` 时自动注册 | ✅ 已实现（`allocation-spring`） | 见 §5.1；宿主声明同类型 Bean 即可接管 |
 | `AllocationAuthorizer` | 全部放行 | ✅ 已实现（`allocation-spring`） | 接若依 `@PreAuthorize` |
-| `TenantProvider` / `DataScopeProvider` | 固定值 / 不限制 | ⬜ 计划中 | 接若依租户与 `@DataScope` |
+| `TenantProvider` | 无租户（落 `''`，不过滤） | ✅ 已实现 | 接若依 `TenantHelper`（§5.2）；数据权限走 `AllocationInput`，不是这里 |
 
-SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应触碰内核代码。标 ⬜ 的一项在实现前不发布接口，
-因为一个没有默认行为、也没有调用点的接口，只会让宿主提前依赖一个还会变的名字。
+SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应触碰内核代码。
 
 **事件的粒度**：`AllocationListener` 只报运行级事件，不报池级事件——一次 10 万池的运行会产出 10 万条事件，
 而池级进度已经由 `Executor.Progress` 以计数器形式提供（热路径上读一个数，不分配对象）。事件在**运行自己的
@@ -412,7 +457,7 @@ SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应
 1. `mvn install` 组件（或用企业私服坐标）
 2. 在业务模块 `pom.xml` 加入 `allocation-spring`（自带 `spring-boot-starter-web` 传递依赖；只要引擎不要
    REST，就只引 `allocation-kernel`）
-3. 执行 `ddl/allocation-mysql8.sql`（4 张表）
+3. 执行 `ddl/allocation-mysql8.sql`（6 张表）
 4. `application.yml` 加 `allocation:` 段（可全部省略）
 5. 准备规则 JSON：放进 `allocation.rules-directory`，文件名即规则码（`<ruleCode>.json`）；
    从库里读规则则声明一个 `RuleResolver` Bean
@@ -434,12 +479,22 @@ SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应
        };
    }
    ```
-7. 用若依代码生成器，对 `allocation_run` / `allocation_pool` 生成管理页面
-8. 调用 `POST /allocation/preview` 验证一个池
-9. 调用 `POST /allocation/runs` 跑全量，轮询 `GET /allocation/runs/{id}`
-10. 与旧系统结果 `POST .../reconcile`
+7. 若依开了多租户（`TENANT_ENABLE=true`），再加一个 Bean，run 就按租户隔离（§5.2）。只有这一行：
 
-**验收标准**：第 8 步在 30 分钟内返回正确明细；第 10 步 `status=MATCH`。
+   ```java
+   @Bean
+   TenantProvider allocationTenantProvider() {
+       return TenantHelper::getTenantId;
+   }
+   ```
+
+   不加也能跑：所有 run 落 `tenant_id=''`，谁都能看到——和别的表没开租户时一样。
+8. 用若依代码生成器，对 `allocation_run` / `allocation_pool` 生成管理页面
+9. 调用 `POST /allocation/preview` 验证一个池
+10. 调用 `POST /allocation/runs` 跑全量，轮询 `GET /allocation/runs/{id}`
+11. 与旧系统结果 `POST .../reconcile`
+
+**验收标准**：第 9 步在 30 分钟内返回正确明细；第 11 步 `status=MATCH`。
 
 ---
 

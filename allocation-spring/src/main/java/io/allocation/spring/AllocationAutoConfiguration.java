@@ -8,6 +8,7 @@ import io.allocation.kernel.service.InMemoryRunRepository;
 import io.allocation.kernel.service.JdbcRunRepository;
 import io.allocation.kernel.service.RuleResolver;
 import io.allocation.kernel.service.RunRepository;
+import io.allocation.kernel.service.TenantProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -34,18 +35,39 @@ import java.lang.management.ManagementFactory;
  *
  * <p>The engine itself is not conditional on anything but its own presence: it has no runtime
  * dependency beyond the JDK, so there is nothing here that can be missing.
+ *
+ * <h2>Tenancy</h2>
+ * A host that is multi-tenant declares one {@link TenantProvider} bean and gets a filtered repository
+ * without changing a single call site. A host that is not declares nothing: the column defaults to an
+ * empty string and the behaviour is exactly what it was before tenants existed. There is no
+ * "multi-tenant mode" switch, because a mode is a branch that only one side of ever gets tested.
  */
 @AutoConfiguration
 @ConditionalOnClass(AllocationTemplate.class)
 @EnableConfigurationProperties(AllocationProperties.class)
 public class AllocationAutoConfiguration {
 
-    /** Persistence for runs: the host's database if it has one, memory if it does not. */
+    /**
+     * Persistence for runs: the host's database if it has one, memory if it does not.
+     *
+     * <p>A {@link TenantProvider} bean is picked up if there is one, and it is the only place in the
+     * starter where a duplicate is an error rather than something to be composed. Listeners can be many
+     * because each one observes; a tenant cannot, because the filter is a decision about whose data this
+     * is. Silently choosing one of two would scope a company's runs to another company, and a stack trace
+     * at startup is the cheap version of that bug.
+     *
+     * <p>Both repositories take the provider, not just the JDBC one: a host develops against memory and
+     * deploys against a database, so a filter present in only one of them is a leak that no pre-deployment
+     * test would show.
+     */
     @Bean
     @ConditionalOnMissingBean
-    public RunRepository allocationRunRepository(ObjectProvider<DataSource> dataSources) {
+    public RunRepository allocationRunRepository(ObjectProvider<DataSource> dataSources,
+                                                 ObjectProvider<TenantProvider> tenants) {
         DataSource dataSource = dataSources.getIfUnique();
-        return dataSource == null ? new InMemoryRunRepository() : new JdbcRunRepository(dataSource);
+        TenantProvider tenant = tenants.getIfAvailable(TenantProvider::none);
+        return dataSource == null ? new InMemoryRunRepository(tenant)
+                : new JdbcRunRepository(dataSource, tenant);
     }
 
     /** Rule documents, read from {@code allocation.rules-directory}. */

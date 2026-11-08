@@ -113,8 +113,27 @@ public interface RunRepository {
     /** Opens a writer for a run that is about to execute. */
     EvidenceWriter openEvidence(String runId);
 
+    /**
+     * The run, if this caller may see it.
+     *
+     * <p>An implementation that is scoped by {@link TenantProvider} returns empty for a run of another
+     * tenant, exactly as for an id that never existed. A host writing its own repository — a MyBatis
+     * mapper, say — must do the same, and must do it here rather than in its controllers: this is the
+     * only method through which the engine reaches a run, so it is the only place where one filter is
+     * enough.
+     */
     Optional<RunRecord> find(String runId);
 
+    /**
+     * The run previously submitted under this key, within the caller's tenant.
+     *
+     * <p>Scoped even when there is no tenant context — the empty tenant stands in for it — because a key
+     * promises "the same request, not a second one", and that promise is made by one tenant to itself.
+     * An unscoped lookup would let a batch job collide with a company's key or, worse, hand it that
+     * company's run. {@link #find} answers the other question (may I read this run) and is deliberately
+     * broader for a context-less caller, because the startup sweep and an operator have to be able to
+     * read every run.
+     */
     Optional<RunRecord> findByIdempotencyKey(String idempotencyKey);
 
     /**

@@ -57,7 +57,17 @@ public enum ErrorCode {
      * a table that has since changed. Hosts that need a key implement {@code fingerprint}; hosts that do
      * not need a key do not implement anything.
      */
-    IDEMPOTENCY_UNVERIFIABLE("ALLOC_013");
+    IDEMPOTENCY_UNVERIFIABLE("ALLOC_013"),
+
+    /**
+     * No run with that id exists — or it belongs to someone else.
+     *
+     * <p>The two are one code on purpose. A caller who is told "not yours" learns that the id is real,
+     * and a run id is the only thing between a stranger and a company's cost allocation; confirming it
+     * exists is a leak. Answering {@code 404} for both is also the only answer that is true for a
+     * mistyped id, which is the common case.
+     */
+    RUN_NOT_FOUND("ALLOC_014");
 
     private final String code;
 

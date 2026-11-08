@@ -245,10 +245,10 @@ class AllocationControllerTest {
     }
 
     @Test
-    void statusOfAnUnknownRunIsBadRequest() throws Exception {
+    void statusOfAnUnknownRunIsNotFound() throws Exception {
         mvc.perform(get("/allocation/runs/{runId}", "missing"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorCode").value("ALLOC_001"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.errorCode").value("ALLOC_014"));
     }
 
     @Test
@@ -333,10 +333,10 @@ class AllocationControllerTest {
     }
 
     @Test
-    void cancellingAnUnknownRunIsBadRequest() throws Exception {
+    void cancellingAnUnknownRunIsNotFound() throws Exception {
         mvc.perform(post("/allocation/runs/{runId}/cancel", "missing"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorCode").value("ALLOC_001"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.errorCode").value("ALLOC_014"));
     }
 
     // ---------------------------------------------------------------- error context
@@ -367,7 +367,7 @@ class AllocationControllerTest {
         for (ErrorCode code : ErrorCode.values()) {
             assertTrue(AllocationExceptionHandler.statusOf(code).isError(), code + " is not an error status");
         }
-        assertEquals(13, ErrorCode.values().length, "docs/API.md §3 must list every code");
+        assertEquals(14, ErrorCode.values().length, "docs/API.md §3 must list every code");
     }
 
     // ---------------------------------------------------------------- helpers

@@ -692,8 +692,17 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         return SpecCodec.parse(rules.require(record.ruleCode()).json());
     }
 
+    /**
+     * The one place a caller-supplied run id becomes a run.
+     *
+     * <p>Every read path goes through here — status, await, result, explain, reconcile — which is what
+     * makes it the right place for the tenant filter to bite: the repository decides whether a run is
+     * visible, this method decides that an invisible run is an error, and nothing below it can be reached
+     * without both. It is also why {@code ALLOC_014} exists instead of reusing a validation code: "no such
+     * run" is a 404, and a caller told "invalid rule" would spend an afternoon on its rule.
+     */
     private RunRepository.RunRecord requireRun(String runId) {
-        return repository.find(runId).orElseThrow(() -> new AllocationException(ErrorCode.RULE_INVALID,
+        return repository.find(runId).orElseThrow(() -> new AllocationException(ErrorCode.RUN_NOT_FOUND,
                 "unknown run " + runId));
     }
 

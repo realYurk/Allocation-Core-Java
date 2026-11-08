@@ -222,9 +222,12 @@ MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation
 > **Micrometer 指标**（`AllocationMetrics`，作为监听器上报 10 个 run 级指标，有 `MeterRegistry` 自动生效，
 > 见 §5.1 与 D-027；多监听器组合见 D-028）、**`AmountSource.Custom`**（宿主把自己的 `AllocationInput` 交给
 > `submit`，数据在库里的宿主不必再导 CSV；带幂等键而输入没有 fingerprint 时拒绝为 `ALLOC_013`，见 D-029）。
+> **多租户**：`TenantProvider`（`allocation_run.tenant_id` + 复合唯一键 + 唯一的过滤器 `find(runId)`；
+> 租户在提交线程上读一次，worker 不需要它，见 D-031）。`DataScopeProvider` **不做**：数据权限约束的是
+> "谁能看到哪些成本中心"，那是输入数据，引擎不知道某一行属于哪个部门——要过滤就写在宿主的
+> `AllocationInput` 里（§1.2）。
 > **未做（有意）**：`@EnableAllocation`（自动配置已足够，多一个注解只会多一种启用方式）、OpenAPI 文档生成
-> （契约文档是 `docs/API.md`，机器可读版本等契约稳定后一次性生成）、`TenantProvider` / `DataScopeProvider`
-> （多租户要先改 schema：`tenant_id` + 复合唯一键 + 全部查询带租户条件，见 D-023 末尾）、
+> （契约文档是 `docs/API.md`，机器可读版本等契约稳定后一次性生成）、
 > 池级指标与残余分布指标（理由见 D-027，池级进度走 `status()`，残余走账本与 `explain`）、
 > `examples/ruoyi-smoke.sh`（`allocation-example` 覆盖了它的功能面，脚本形式留待真实若依工程联调时再写）。
 
@@ -243,7 +246,7 @@ MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation
 5. REST：`POST /allocation/preview|runs|reconcile`，`GET /allocation/runs/{id}`
 6. 错误映射：`ErrorCode → HTTP status + 稳定业务码`
 7. 权限钩子：`AllocationAuthorizer` SPI（默认放行，宿主接若依 `@PreAuthorize`）
-8. 数据权限钩子：`TenantProvider` / `DataScopeProvider` SPI
+8. 数据权限钩子：`TenantProvider` SPI（已实现，D-031）；`DataScopeProvider` 不做，数据权限属于输入数据
 9. Micrometer 指标：池数、行数、耗时、残余分布、失败原因
 
 **验收脚本**：`examples/ruoyi-smoke.sh` —— 空库 → 建表 → 提交 → 轮询 → 对账，全绿。

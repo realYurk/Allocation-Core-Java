@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -37,6 +38,11 @@ import java.util.Optional;
  *   <li><b>Evidence is written once.</b> Pools, lines and results use the run's own sequence numbers,
  *       so a second write collides on the primary key. A retry that reached this point is a bug in the
  *       caller, and it is better to hear about it than to silently duplicate an audit trail.</li>
+ *   <li><b>A run belongs to one tenant.</b> When a {@link TenantProvider} is configured, every path that
+ *       turns a caller's run id into a run adds {@code tenant_id = ?}, and a run belonging to another
+ *       tenant does not exist as far as that caller is concerned. The evidence tables are not filtered
+ *       and do not need to be: {@code run_id} is a global primary key, so they are only reachable
+ *       through a run that was already resolved.</li>
  * </ul>
  *
  * <p>Transaction scope is one artefact: all pools, or all lines, or all results. That is the largest
@@ -55,10 +61,11 @@ public final class JdbcRunRepository implements RunRepository {
     private static final int BATCH_SIZE = 1_000;
 
     private static final String INSERT_RUN = """
-            INSERT INTO allocation_run (run_id, rule_code, rule_sha256, idempotency_key, request_sha256,
-                                        precision, status, input_amount, output_amount, pool_count, row_count,
-                                        engine_version, failure_code, failure_message, started_at, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO allocation_run (run_id, tenant_id, rule_code, rule_sha256, idempotency_key,
+                                        request_sha256, precision, status, input_amount, output_amount,
+                                        pool_count, row_count, engine_version, failure_code, failure_message,
+                                        started_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     private static final String SELECT_RUN = """
@@ -124,8 +131,12 @@ public final class JdbcRunRepository implements RunRepository {
              LIMIT ? OFFSET ?
             """;
 
+    /** Appended to a run lookup when there is a tenant in context. */
+    private static final String TENANT_CLAUSE = " AND tenant_id = ?";
+
     private final DataSource dataSource;
     private final String engineVersion;
+    private final TenantProvider tenants;
 
     public JdbcRunRepository(DataSource dataSource) {
         this(dataSource, Engine.VERSION);
@@ -135,8 +146,34 @@ public final class JdbcRunRepository implements RunRepository {
      * @param engineVersion stamped on every inserted run; a host that shades the engine can say so here
      */
     public JdbcRunRepository(DataSource dataSource, String engineVersion) {
+        this(dataSource, engineVersion, TenantProvider.none());
+    }
+
+    /** The common host case: a database, and a tenant to scope it to. */
+    public JdbcRunRepository(DataSource dataSource, TenantProvider tenants) {
+        this(dataSource, Engine.VERSION, tenants);
+    }
+
+    /**
+     * @param tenants the caller's tenant, consulted when a run is written and when one is looked up;
+     *                {@link TenantProvider#none()} keeps the repository single-tenant
+     */
+    public JdbcRunRepository(DataSource dataSource, String engineVersion, TenantProvider tenants) {
         this.dataSource = dataSource;
         this.engineVersion = engineVersion;
+        this.tenants = tenants == null ? TenantProvider.none() : tenants;
+    }
+
+    /**
+     * The tenant to write, or {@code null} when there is no tenant context.
+     *
+     * <p>Read once per row moved, on whatever thread the caller is on. The value goes into the row at
+     * insert time and is never re-read: a run belongs to the tenant that submitted it, not to whoever
+     * happens to query it later.
+     */
+    private String tenant() {
+        String tenant = tenants.currentTenant();
+        return tenant == null || tenant.isEmpty() ? null : tenant;
     }
 
     // ---------------------------------------------------------------- evidence writer
@@ -340,7 +377,10 @@ public final class JdbcRunRepository implements RunRepository {
 
     @Override
     public Optional<RunRecord> find(String runId) {
-        return queryOne(SELECT_RUN + " WHERE run_id = ?", runId);
+        String tenant = tenant();
+        return tenant == null
+                ? queryOne(SELECT_RUN + " WHERE run_id = ?", runId)
+                : queryOne(SELECT_RUN + " WHERE run_id = ?" + TENANT_CLAUSE, runId, tenant);
     }
 
     @Override
@@ -350,11 +390,19 @@ public final class JdbcRunRepository implements RunRepository {
             // issuing "= NULL" keeps the caller's intent explicit.
             return Optional.empty();
         }
-        return queryOne(SELECT_RUN + " WHERE idempotency_key = ?", idempotencyKey);
+        // Always scoped, with the empty tenant standing in for "no context". A key is only unique within
+        // a tenant, so an unscoped lookup would let a batch job collide with a company's key — and, worse,
+        // hand it that company's run. Reads of a run id are a different question, answered by find().
+        return queryOne(SELECT_RUN + " WHERE idempotency_key = ?" + TENANT_CLAUSE, idempotencyKey,
+                Objects.requireNonNullElse(tenant(), ""));
     }
 
     /**
      * Runs in a given state, oldest first.
+     *
+     * <p>Deliberately <em>not</em> tenant-filtered. This is an operator's query, not a caller's: the
+     * startup sweep asks "which runs did a dead process leave behind", and the honest answer is every
+     * tenant's. A host that wants a per-tenant view of unfinished work has the columns for it.
      *
      * <p>Ordered by {@code started_at} so a caller that is looking for abandoned runs walks them in the
      * order they died, and limited so a database with a year of unfinished rows does not produce a list
@@ -379,10 +427,12 @@ public final class JdbcRunRepository implements RunRepository {
         }
     }
 
-    private Optional<RunRecord> queryOne(String sql, String parameter) {
+    private Optional<RunRecord> queryOne(String sql, String... parameters) {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, parameter);
+            for (int i = 0; i < parameters.length; i++) {
+                statement.setString(1 + i, parameters[i]);
+            }
             try (ResultSet rs = statement.executeQuery()) {
                 return rs.next() ? Optional.of(run(rs)) : Optional.empty();
             }
@@ -396,24 +446,27 @@ public final class JdbcRunRepository implements RunRepository {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(INSERT_RUN)) {
             statement.setString(1, run.runId());
-            statement.setString(2, run.ruleCode());
-            statement.setString(3, run.ruleSha256());
-            statement.setString(4, run.idempotencyKey());
-            statement.setString(5, run.requestSha256());
-            statement.setInt(6, run.precision());
-            statement.setString(7, run.status().name());
-            statement.setLong(8, run.inputAmount());
-            statement.setLong(9, run.outputAmount());
-            statement.setInt(10, run.poolCount());
-            statement.setLong(11, run.rowCount());
-            statement.setString(12, engineVersion);
-            statement.setString(13, run.failureCode());
-            statement.setString(14, run.failureMessage());
-            statement.setLong(15, run.startedAtEpochMs());
+            // '' rather than NULL, so the column is never ambiguous and the composite unique key behaves
+            // the same whether or not the host has tenants.
+            statement.setString(2, Objects.requireNonNullElse(tenant(), ""));
+            statement.setString(3, run.ruleCode());
+            statement.setString(4, run.ruleSha256());
+            statement.setString(5, run.idempotencyKey());
+            statement.setString(6, run.requestSha256());
+            statement.setInt(7, run.precision());
+            statement.setString(8, run.status().name());
+            statement.setLong(9, run.inputAmount());
+            statement.setLong(10, run.outputAmount());
+            statement.setInt(11, run.poolCount());
+            statement.setLong(12, run.rowCount());
+            statement.setString(13, engineVersion);
+            statement.setString(14, run.failureCode());
+            statement.setString(15, run.failureMessage());
+            statement.setLong(16, run.startedAtEpochMs());
             if (run.finishedAtEpochMs() == null) {
-                statement.setNull(16, java.sql.Types.BIGINT);
+                statement.setNull(17, java.sql.Types.BIGINT);
             } else {
-                statement.setLong(16, run.finishedAtEpochMs());
+                statement.setLong(17, run.finishedAtEpochMs());
             }
             statement.executeUpdate();
         } catch (SQLException e) {
@@ -425,6 +478,13 @@ public final class JdbcRunRepository implements RunRepository {
         }
     }
 
+    /**
+     * Applies a terminal status.
+     *
+     * <p>Not tenant-filtered, and it does not need to be: the only caller is the worker that was handed
+     * the record at submit time, on a thread that has no tenant context of its own. The guard that
+     * matters here is the status one.
+     */
     @Override
     public void update(RunRecord run) {
         try (Connection connection = dataSource.getConnection()) {

@@ -70,8 +70,24 @@ class AllocationHttpTest {
 
     private static final Path HOME = createHome();
 
+    /**
+     * The host application: empty component scan, so every bean arrives through {@code
+     * AutoConfiguration.imports}.
+     *
+     * <p>The tenant provider is here rather than in a test slice so the tenancy path is exercised through
+     * the same wiring a host would use. It is mutable because one test has to be two companies, and it
+     * defaults to "no tenant", which is the single-tenant behaviour every other test asserts.
+     */
     @SpringBootApplication
     static class HttpApplication {
+
+        static final java.util.concurrent.atomic.AtomicReference<String> TENANT =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        @org.springframework.context.annotation.Bean
+        io.allocation.kernel.service.TenantProvider tenantProvider() {
+            return TENANT::get;
+        }
     }
 
     @DynamicPropertySource
@@ -149,11 +165,40 @@ class AllocationHttpTest {
     }
 
     @Test
-    void anUnknownRunIsABadRequestWithAStableCode() {
+    void anUnknownRunIsANotFoundWithAStableCode() {
         ResponseEntity<Map> response = rest.getForEntity("/allocation/runs/{id}", Map.class, "01MISSING");
 
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertEquals("ALLOC_001", response.getBody().get("errorCode"));
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertEquals("ALLOC_014", response.getBody().get("errorCode"));
+    }
+
+    @Test
+    void aRunBelongsToOneTenantOverHttp() {
+        // The end-to-end version of the repository contract: the filter is expressed once, in the
+        // repository, and this proves it reaches the socket as a 404 rather than as somebody else's data.
+        HttpApplication.TENANT.set("acme");
+        try {
+            ResponseEntity<Map> submitted = rest.postForEntity("/allocation/runs", Map.of(
+                    "ruleCode", "rule",
+                    "source", Map.of("type", "csv", "path", HOME.toString()),
+                    "idempotencyKey", "tenant-1"), Map.class);
+            assertEquals(HttpStatus.ACCEPTED, submitted.getStatusCode(), String.valueOf(submitted.getBody()));
+            String runId = (String) ((Map<String, Object>) submitted.getBody().get("data")).get("runId");
+            awaitPublished(runId);
+
+            HttpApplication.TENANT.set("globex");
+
+            ResponseEntity<Map> status = rest.getForEntity("/allocation/runs/{id}", Map.class, runId);
+            assertEquals(HttpStatus.NOT_FOUND, status.getStatusCode(),
+                    "another company's run must not be readable, and must not be distinguishable from absent");
+            assertEquals("ALLOC_014", status.getBody().get("errorCode"));
+
+            ResponseEntity<Map> result = rest.getForEntity("/allocation/runs/{id}/result", Map.class, runId);
+            assertEquals(HttpStatus.NOT_FOUND, result.getStatusCode(),
+                    "the ledger and the results hang off the run, so they are unreachable without it");
+        } finally {
+            HttpApplication.TENANT.set(null);
+        }
     }
 
     @Test

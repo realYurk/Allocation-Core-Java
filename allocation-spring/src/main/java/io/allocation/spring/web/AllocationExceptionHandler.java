@@ -96,6 +96,9 @@ public class AllocationExceptionHandler {
             case REQUEST_TOO_LARGE -> HttpStatus.PAYLOAD_TOO_LARGE;
             case TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
+            // Also the answer for a run that exists but belongs to another tenant: telling the two apart
+            // would confirm the id, and an id is the only thing standing between a stranger and the run.
+            case RUN_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case INTERNAL -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }

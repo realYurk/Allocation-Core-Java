@@ -21,8 +21,13 @@ CREATE TABLE IF NOT EXISTS allocation_rule (
   KEY idx_rule_sha (spec_sha256)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- tenant_id is '' for a single-tenant deployment, so the same statements run everywhere and the
+-- composite unique key degenerates into the key on idempotency_key that it always was. The child tables
+-- carry no tenant column: run_id is a global primary key, so a child row can only be reached through a
+-- run, and it is the run that is filtered.
 CREATE TABLE IF NOT EXISTS allocation_run (
   run_id          VARCHAR(32)  NOT NULL,
+  tenant_id       VARCHAR(64)  NOT NULL DEFAULT '',
   rule_code       VARCHAR(64)  NOT NULL,
   rule_sha256     CHAR(64)     NOT NULL,
   idempotency_key VARCHAR(128)     NULL,
@@ -40,7 +45,10 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   finished_at     BIGINT           NULL,
   create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (run_id),
-  UNIQUE KEY uk_idem (idempotency_key),
+  -- Scoped to the tenant: two companies both numbering their monthly batch "2026-01" is normal, and an
+  -- index that made the second one fail would be a bug with a plausible-looking error message. MySQL
+  -- treats NULLs as distinct in a unique index, so runs submitted without a key stay unfindable, as before.
+  UNIQUE KEY uk_idem (tenant_id, idempotency_key),
   KEY idx_rule_time (rule_code, create_time),
   KEY idx_status (status, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

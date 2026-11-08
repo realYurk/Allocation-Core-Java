@@ -21,11 +21,16 @@ CREATE TABLE IF NOT EXISTS allocation_rule (
 
 CREATE INDEX IF NOT EXISTS idx_rule_sha ON allocation_rule (spec_sha256);
 
+-- tenant_id is '' for a single-tenant deployment, which is why the same statements run everywhere: a
+-- host without tenants writes the default and the composite unique key degenerates into the key on
+-- idempotency_key that it always was. The child tables below carry no tenant column — run_id is a
+-- global primary key, so a row can only be reached through a run, and it is the run that is filtered.
 CREATE TABLE IF NOT EXISTS allocation_run (
   run_id          TEXT    PRIMARY KEY,
+  tenant_id       TEXT    NOT NULL DEFAULT '',
   rule_code       TEXT    NOT NULL,
   rule_sha256     TEXT    NOT NULL,
-  idempotency_key TEXT    UNIQUE,
+  idempotency_key TEXT,
   request_sha256  TEXT    NOT NULL,
   status          TEXT    NOT NULL,
   precision       INTEGER NOT NULL,
@@ -38,7 +43,10 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   failure_message TEXT,
   started_at      INTEGER NOT NULL,
   finished_at     INTEGER,
-  create_time     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+  create_time     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Scoped to the tenant: two companies both numbering their monthly batch "2026-01" is normal, and an
+  -- index that made the second one fail would be a bug with a plausible-looking error message.
+  UNIQUE (tenant_id, idempotency_key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_run_rule_time ON allocation_run (rule_code, create_time);
