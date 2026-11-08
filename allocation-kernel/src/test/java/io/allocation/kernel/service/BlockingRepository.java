@@ -153,7 +153,7 @@ final class BlockingRepository implements RunRepository {
     }
 
     @Override
-    public List<RunSink.ResultLine> results(String runId, int offset, int limit) {
+    public List<RunSink.ResultLine> results(String runId, long offset, int limit) {
         return delegate.results(runId, offset, limit);
     }
 

@@ -31,7 +31,7 @@ final class RepositoryAmountRows implements AmountRows {
 
     @Override
     public void stream(RowConsumer consumer) {
-        int offset = 0;
+        long offset = 0;
         while (true) {
             List<RunSink.ResultLine> page = repository.results(runId, offset, PAGE_SIZE);
             for (RunSink.ResultLine line : page) {

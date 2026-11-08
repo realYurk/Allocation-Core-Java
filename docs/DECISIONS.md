@@ -925,3 +925,33 @@ run 都要付的钱。用一件罕见事故的信息量，换掉一件常见操�
   不扩大范围，等有人真正需要"规则也进数据库"时再单独做。
 - 没有给 `result` 加"历史规则不存在就报错的开关"。直接做成无条件验证：一个不验证 digest 的读取路径，就是
   把 D-016（哈希目录不哈希内容）、D-029（幂等键不看内容）同一个 bug 再犯第四次。
+
+---
+
+## D-036 翻页用 keyset 而不是 OFFSET，因为 seq 是稠密的
+
+**状态**：已接受
+
+**背景**：`results` 用 `LIMIT ? OFFSET ?`。OFFSET 分页的代价是 O(offset)：翻到第 N 页，数据库要把前
+N-1 页的行全部重新扫一遍再丢掉。对一个能写千万行的组件，这是"第一页 1ms、第 10 万页 40 秒"的退化曲线，
+而且前端每一页都在付上一页的利息。
+
+而 `allocation_result` 的主键是 `(run_id, seq)`，`seq` 由单一计数器 `++seq` 分配——**它是稠密的 1..N**，
+不是用 ULID 或时间戳生成的稀疏值。稠密意味着"跳过 N 行"和"`seq > N`"是同一件事，所以 keyset 分页在这里
+不是近似，是精确等价，而且走主键索引是 O(log N) + O(limit)。
+
+**决策**：契约从 `results(runId, int offset, int limit)` 改成 `results(runId, long afterSeq, int limit)`，
+SQL 从 `LIMIT ? OFFSET ?` 改成 `WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?`。语义逐字不变——"跳过
+afterSeq 行返回 limit 行"——但表述成 keyset，实现才能走索引而不是走扫描。`afterSeq` 从 0 开始，与 offset
+同值，所以 `DefaultAllocationTemplate.result` 的 `(page-1)*size` 调用点一行没改（int 自动拓宽为 long）。
+
+**为什么不用"记录上一页最后一个 seq，由调用方传"**：那才是教科书 keyset 的写法，但它要求 `RunResult`
+把 `seq` 暴露给客户端、客户端再原样传回来，是对 REST 契约的一次破坏性变更。这里不需要：seq 稠密，offset
+本身就是 keyset。用 offset 的调用方零改动，却拿到 keyset 的复杂度——这是稠密 seq 这个已有不变量的红利，
+不付接口变更的钱。
+
+**依赖的不变量**：seq 稠密、从 1 开始、按写出顺序单调。这个不变量由 `JdbcRunRepository` 的 `++seq` 与
+`EvidenceWriter` 的单一写入保证，并由 `paginationBySeq` 测试钉住（25 行、步长 7、断言拼起来与整表相等）。
+谁要引入稀疏 seq（比如给 `allocation_line` 用 ULID 排序键），谁就得先回来改这条。
+
+**顺带**：`resultCount` 仍是 `COUNT(*)`，没有被这条影响——它是 O(log N) 的索引计数，不是分页的一部分。

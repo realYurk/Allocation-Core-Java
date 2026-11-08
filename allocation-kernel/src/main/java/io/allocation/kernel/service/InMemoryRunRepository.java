@@ -179,12 +179,13 @@ public final class InMemoryRunRepository implements RunRepository {
     }
 
     @Override
-    public List<RunSink.ResultLine> results(String runId, int offset, int limit) {
+    public List<RunSink.ResultLine> results(String runId, long afterSeq, int limit) {
         List<RunSink.ResultLine> all = results.getOrDefault(runId, List.of());
-        if (offset >= all.size()) {
+        long start = Math.max(0L, afterSeq);
+        if (start >= all.size()) {
             return List.of();
         }
-        return new ArrayList<>(all.subList(offset, Math.min(all.size(), offset + limit)));
+        return new ArrayList<>(all.subList((int) start, (int) Math.min(all.size(), start + limit)));
     }
 
     @Override

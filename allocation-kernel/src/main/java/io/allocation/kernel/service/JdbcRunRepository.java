@@ -127,8 +127,9 @@ public final class JdbcRunRepository implements RunRepository {
             SELECT stage_id, row_id, coordinate, amount
               FROM allocation_result
              WHERE run_id = ?
+               AND seq > ?
              ORDER BY seq
-             LIMIT ? OFFSET ?
+             LIMIT ?
             """;
 
     /** Appended to a run lookup when there is a tenant in context. */
@@ -714,15 +715,15 @@ public final class JdbcRunRepository implements RunRepository {
     }
 
     @Override
-    public List<RunSink.ResultLine> results(String runId, int offset, int limit) {
+    public List<RunSink.ResultLine> results(String runId, long afterSeq, int limit) {
         if (limit <= 0) {
             return List.of();
         }
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(SELECT_RESULT)) {
             statement.setString(1, runId);
-            statement.setInt(2, limit);
-            statement.setInt(3, Math.max(0, offset));
+            statement.setLong(2, Math.max(0L, afterSeq));
+            statement.setInt(3, limit);
             try (ResultSet rs = statement.executeQuery()) {
                 List<RunSink.ResultLine> out = new ArrayList<>();
                 while (rs.next()) {

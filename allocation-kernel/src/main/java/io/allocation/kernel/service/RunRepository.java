@@ -212,8 +212,17 @@ public interface RunRepository {
         return out;
     }
 
-    /** Paged results; {@code offset} is zero based. */
-    List<RunSink.ResultLine> results(String runId, int offset, int limit);
+    /**
+     * A page of results, keyed by {@code seq} rather than by offset.
+     *
+     * <p>{@code afterSeq} is the sequence number of the last row already seen (the caller starts at 0),
+     * and the returned rows are those with {@code seq > afterSeq} in write order, limited to {@code limit}.
+     * Because {@code seq} is dense (1..N, assigned by a single counter), this is exactly "skip {@code
+     * afterSeq} rows" — but it is stated as a keyset so an implementation can seek on the primary key
+     * instead of paying O(offset) to walk past rows it has already returned. The two wordings are the same
+     * thing today and differ only on page ten thousand of a million-row run.
+     */
+    List<RunSink.ResultLine> results(String runId, long afterSeq, int limit);
 
     int resultCount(String runId);
 }

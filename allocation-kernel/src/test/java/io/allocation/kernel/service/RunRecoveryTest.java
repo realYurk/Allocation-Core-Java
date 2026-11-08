@@ -149,7 +149,7 @@ class RunRecoveryTest {
         }
 
         @Override
-        public java.util.List<io.allocation.kernel.exec.RunSink.ResultLine> results(String runId, int offset,
+        public java.util.List<io.allocation.kernel.exec.RunSink.ResultLine> results(String runId, long offset,
                                                                                     int limit) {
             return delegate.results(runId, offset, limit);
         }
