@@ -3,7 +3,7 @@ package io.allocation.kernel.exec;
 import io.allocation.kernel.AllocationException;
 import io.allocation.kernel.ErrorCode;
 import io.allocation.kernel.coord.Coord;
-import io.allocation.kernel.io.CsvReader;
+import io.allocation.kernel.io.StreamingCsvReader;
 import io.allocation.kernel.money.Decimal;
 import io.allocation.kernel.spec.AllocationSpec;
 
@@ -19,6 +19,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Reads amount and driver datasets from delimited files under a base directory.
@@ -56,35 +57,53 @@ public final class CsvInput implements AllocationInput {
 
     @Override
     public List<Row> readAmounts(String dataset) {
+        List<Row> rows = new ArrayList<>(1024);
+        forEachAmount(dataset, rows::add);
+        return rows;
+    }
+
+    @Override
+    public void forEachAmount(String dataset, Consumer<Row> consumer) {
         Path path = amountPaths.get(dataset);
         if (path == null) {
             throw new AllocationException(ErrorCode.RULE_INVALID, "unknown amount dataset " + dataset);
         }
         List<String> dimensions = spec.dimensions();
         int precision = spec.precision();
-        CsvReader reader = new CsvReader(open(path));
-        List<String> header = reader.read();
-        if (header == null) {
-            throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + ": empty file");
-        }
-        Map<String, Integer> positions = headerPositions(header, path);
-        int[] dimensionPositions = new int[dimensions.size()];
-        for (int i = 0; i < dimensions.size(); i++) {
-            Integer position = positions.get(dimensions.get(i));
-            if (position == null) {
-                throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
-                        path + " missing dimension " + dimensions.get(i));
+        // The streaming reader exists so that "read the amounts" does not mean "hold the file": it
+        // splits records from a stream and delegates each one to the same parser the reference uses,
+        // so the grammar is identical and the memory is one record.
+        try (StreamingCsvReader reader = new StreamingCsvReader(open(path))) {
+            List<String> header = reader.read();
+            if (header == null) {
+                throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + ": empty file");
             }
-            dimensionPositions[i] = position;
+            Map<String, Integer> positions = headerPositions(header, path);
+            int[] dimensionPositions = new int[dimensions.size()];
+            for (int i = 0; i < dimensions.size(); i++) {
+                Integer position = positions.get(dimensions.get(i));
+                if (position == null) {
+                    throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
+                            path + " missing dimension " + dimensions.get(i));
+                }
+                dimensionPositions[i] = position;
+            }
+            Integer amountPosition = positions.get("amount");
+            if (amountPosition == null) {
+                throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + " missing amount");
+            }
+            Integer idPosition = positions.get("row_id");
+            readAmounts(path, reader, dimensions, precision, dimensionPositions, amountPosition, idPosition,
+                    consumer);
+        } catch (IOException e) {
+            throw new AllocationException(ErrorCode.INTERNAL, "cannot read " + path, e);
         }
-        Integer amountPosition = positions.get("amount");
-        if (amountPosition == null) {
-            throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + " missing amount");
-        }
-        Integer idPosition = positions.get("row_id");
+    }
 
+    private void readAmounts(Path path, StreamingCsvReader reader, List<String> dimensions, int precision,
+                             int[] dimensionPositions, int amountPosition, Integer idPosition,
+                             Consumer<Row> consumer) throws IOException {
         MemberDictionary dictionary = new MemberDictionary(dimensionPositions.length);
-        List<Row> rows = new ArrayList<>(1024);
         List<String> record;
         int line = 1;
         while ((record = reader.read()) != null) {
@@ -116,9 +135,8 @@ public final class CsvInput implements AllocationInput {
             if (idPosition != null && idPosition < record.size() && !record.get(idPosition).isEmpty()) {
                 id = record.get(idPosition);
             }
-            rows.add(new Row(new Coord(members), amount, new String[]{id}));
+            consumer.accept(new Row(new Coord(members), amount, new String[]{id}));
         }
-        return rows;
     }
 
     @Override
@@ -128,30 +146,38 @@ public final class CsvInput implements AllocationInput {
             throw new AllocationException(ErrorCode.RULE_INVALID, "unknown driver dataset " + dataset);
         }
         List<String> dimensions = spec.dimensions();
-        CsvReader reader = new CsvReader(open(path));
-        List<String> header = reader.read();
-        if (header == null) {
-            throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + ": empty file");
-        }
-        Map<String, Integer> positions = headerPositions(header, path);
-        Integer weightPosition = positions.get(weightField);
-        if (weightPosition == null) {
-            throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
-                    path + " missing weight column " + weightField);
-        }
-        int[] dimensionPositions = new int[dimensions.size()];
-        int found = 0;
-        for (int i = 0; i < dimensions.size(); i++) {
-            Integer position = positions.get(dimensions.get(i));
-            dimensionPositions[i] = position == null ? -1 : position;
-            if (position != null) {
-                found++;
+        try (StreamingCsvReader reader = new StreamingCsvReader(open(path))) {
+            List<String> header = reader.read();
+            if (header == null) {
+                throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + ": empty file");
             }
+            Map<String, Integer> positions = headerPositions(header, path);
+            Integer weightPosition = positions.get(weightField);
+            if (weightPosition == null) {
+                throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
+                        path + " missing weight column " + weightField);
+            }
+            int[] dimensionPositions = new int[dimensions.size()];
+            int found = 0;
+            for (int i = 0; i < dimensions.size(); i++) {
+                Integer position = positions.get(dimensions.get(i));
+                dimensionPositions[i] = position == null ? -1 : position;
+                if (position != null) {
+                    found++;
+                }
+            }
+            if (found == 0) {
+                throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
+                        path + " has no matching dimensions");
+            }
+            return readDrivers(path, reader, dimensions, weightPosition, dimensionPositions);
+        } catch (IOException e) {
+            throw new AllocationException(ErrorCode.INTERNAL, "cannot read " + path, e);
         }
-        if (found == 0) {
-            throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, path + " has no matching dimensions");
-        }
+    }
 
+    private List<DriverRow> readDrivers(Path path, StreamingCsvReader reader, List<String> dimensions,
+                                        int weightPosition, int[] dimensionPositions) throws IOException {
         MemberDictionary dictionary = new MemberDictionary(dimensionPositions.length);
         List<DriverRow> rows = new ArrayList<>(4096);
         List<String> record;
@@ -204,7 +230,17 @@ public final class CsvInput implements AllocationInput {
         }
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            String hash = HexFormat.of().formatHex(digest.digest(Files.readAllBytes(path)));
+            // Streamed, not slurped: a dataset fingerprint must not cost the size of the dataset.
+            // Reading a 200MB export into a byte[] to hash it is the kind of "temporary" allocation
+            // that decides whether a run fits in its container.
+            try (InputStream in = Files.newInputStream(path)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(buffer)) >= 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            String hash = HexFormat.of().formatHex(digest.digest());
             fingerprints.put(label, hash);
             return hash;
         } catch (IOException | NoSuchAlgorithmException e) {

@@ -52,10 +52,29 @@ class CorpusTest {
         }
         assertTrue(scenarios.size() >= 30, "expected a substantial corpus, found " + scenarios.size());
         return scenarios.stream().map(dir -> DynamicTest.dynamicTest(dir.getFileName().toString(),
-                () -> replay(dir)));
+                () -> replay(dir, Executor.Options.sequential())));
     }
 
-    private void replay(Path scenario) throws IOException {
+    /**
+     * The same corpus with a spill budget of one row, so every buffer crosses the disk boundary.
+     *
+     * <p>This is not a second implementation being compared with the first: it is the same engine under
+     * the memory conditions a large batch actually meets. If a stage buffer's encoding lost a null
+     * member, reordered a coordinate or dropped an identifier, the frozen artefacts would stop matching
+     * here — and nowhere else, because a small run never spills.
+     */
+    @TestFactory
+    Stream<DynamicTest> replaysEveryScenarioWhenEveryStageSpills() throws IOException {
+        List<Path> scenarios;
+        try (Stream<Path> listing = Files.list(CORPUS)) {
+            scenarios = listing.filter(Files::isDirectory).sorted().toList();
+        }
+        Executor.Options spilled = Executor.Options.sequential().withMaxRowsInMemory(1);
+        return scenarios.stream().map(dir -> DynamicTest.dynamicTest("spilled: " + dir.getFileName(),
+                () -> replay(dir, spilled)));
+    }
+
+    private void replay(Path scenario, Executor.Options options) throws IOException {
         String expectedStatus = expectedStatus(scenario);
         Path rule = scenario.resolve("rule.json");
         Path output = Files.createTempDirectory("allocation-corpus-");
@@ -63,19 +82,14 @@ class CorpusTest {
 
         if ("FAIL".equals(expectedStatus)) {
             AllocationException failure = assertThrows(AllocationException.class,
-                    () -> AllocationRunner.run(rule, output),
+                    () -> AllocationRunner.run(rule, output, options),
                     "scenario must be rejected: " + scenario.getFileName());
             assertTrue(!Files.exists(output), "a rejected run must not leave output behind");
             assertTrue(failure.code() != null, "rejection must carry an error code");
             return;
         }
 
-        RunSummary summary;
-        try {
-            summary = AllocationRunner.run(rule, output);
-        } finally {
-            // nothing to clean up on success; the temp directory is asserted below
-        }
+        RunSummary summary = AllocationRunner.run(rule, output, options);
         assertEquals("PASS", summary.status(), "run did not pass: " + scenario.getFileName());
         assertEquals(summary.inputAmount(), summary.outputAmount(),
                 "input and output totals must match: " + scenario.getFileName());

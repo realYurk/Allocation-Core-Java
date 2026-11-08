@@ -121,18 +121,22 @@ public final class AllocationCli {
 
     private static int runCommand(String[] args, PrintStream out, PrintStream err) {
         if (args.length < 3) {
-            err.println("usage: run <rule.json> <outputDir> [--workers N]");
+            err.println("usage: run <rule.json> <outputDir> [--workers N] [--max-rows N]");
             return 2;
         }
         int workers = 1;
+        long maxRows = Executor.Options.DEFAULT_MAX_ROWS_IN_MEMORY;
         for (int i = 3; i < args.length; i++) {
             if ("--workers".equals(args[i]) && i + 1 < args.length) {
                 workers = Integer.parseInt(args[++i]);
+            } else if ("--max-rows".equals(args[i]) && i + 1 < args.length) {
+                maxRows = Long.parseLong(args[++i]);
             }
         }
         Path rule = Path.of(args[1]);
         Path output = Path.of(args[2]);
-        RunSummary summary = AllocationRunner.run(rule, output, new Executor.Options(workers, false));
+        RunSummary summary = AllocationRunner.run(rule, output,
+                new Executor.Options(workers, false, maxRows));
         out.println("status=" + summary.status()
                 + " input=" + summary.inputAmount()
                 + " output=" + summary.outputAmount()

@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,6 +44,18 @@ import java.util.concurrent.Future;
  * <h2>Fail-closed</h2>
  * Any violation aborts the run. No partial result set is published, because a half-written ledger is
  * worse than no ledger: it looks like an answer.
+ *
+ * <h2>Memory</h2>
+ * Rows do not accumulate in lists. Every stage buffer is a {@link RowStore}: it holds rows in memory up
+ * to {@link Options#maxRowsInMemory()} and spills the rest to a temp file, preserving insertion order, so
+ * {@code forEach} may be replayed any number of times. Peak heap therefore tracks the budget the caller
+ * chose plus the number of pools, not the size of the input.
+ *
+ * <p>Two things are still held in memory by design, and both are worth naming rather than discovering:
+ * the driver table for a rule (allocation needs random access to weights, not a stream), and the
+ * coordinate keys of a stage that coalesces its output (coalescing <em>is</em> a map; the alternative is
+ * an external sort, which is not worth its complexity while the map is the smaller side). The store
+ * removes the part that had no such excuse: whole input and output row sets.
  */
 public final class Executor {
 
@@ -51,8 +64,33 @@ public final class Executor {
      *
      * @param workers              pool-level parallelism; {@code 0} or {@code 1} runs sequentially
      * @param blockOnMissingTarget treat "declared target has no driver weight" as fatal instead of a warning
+     * @param maxRowsInMemory      rows a stage buffer may hold before it spills to disk;
+     *                             {@link #UNBOUNDED_ROWS_IN_MEMORY} never spills
      */
-    public record Options(int workers, boolean blockOnMissingTarget) {
+    public record Options(int workers, boolean blockOnMissingTarget, long maxRowsInMemory) {
+
+        /**
+         * Rows a stage buffer keeps in memory by default.
+         *
+         * <p>Chosen for the case that actually happens: a few hundred thousand rows fit without
+         * touching the disk, and a container with a 512MB heap is not at risk. Callers who know their
+         * input is small can raise it; callers in a 64MB container should lower it.
+         */
+        public static final long DEFAULT_MAX_ROWS_IN_MEMORY = 250_000L;
+
+        /** Never spill. Appropriate for a bounded input and a heap you control. */
+        public static final long UNBOUNDED_ROWS_IN_MEMORY = Long.MAX_VALUE;
+
+        public Options {
+            if (maxRowsInMemory < 1) {
+                throw new IllegalArgumentException("maxRowsInMemory must be at least 1, got " + maxRowsInMemory);
+            }
+        }
+
+        /** Options with the default spill budget. */
+        public Options(int workers, boolean blockOnMissingTarget) {
+            this(workers, blockOnMissingTarget, DEFAULT_MAX_ROWS_IN_MEMORY);
+        }
 
         public static Options sequential() {
             return new Options(1, false);
@@ -61,9 +99,13 @@ public final class Executor {
         public static Options parallel(int workers) {
             return new Options(workers, false);
         }
+
+        /** Same options with a different spill budget. */
+        public Options withMaxRowsInMemory(long rows) {
+            return new Options(workers, blockOnMissingTarget, rows);
+        }
     }
 
-    /** Summary of a completed run. */
     private static final DateTimeFormatter RFC3339 =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
 
@@ -75,7 +117,10 @@ public final class Executor {
     private final String[] dimensionNames;
     private final String ruleSha256;
 
-    private final Map<String, List<Row>> inbox = new HashMap<>();
+    private final Map<String, RowStore> inbox = new HashMap<>();
+    private final Map<String, Router> routers = new HashMap<>();
+    private final List<RowStore> stores = new ArrayList<>();
+    private final SpillSpace spill = new SpillSpace();
     private final Map<String, String> dataSha256 = new LinkedHashMap<>();
     private final Map<String, List<DriverRow>> driverCache = new HashMap<>();
     private final List<RunSummary.StageSummary> stageSummaries = new ArrayList<>();
@@ -97,6 +142,11 @@ public final class Executor {
         this.options = options;
         this.spec = plan.spec();
         this.dimensionNames = spec.dimensions().toArray(new String[0]);
+        for (Map.Entry<String, List<Plan.Route>> entry : plan.outgoing().entrySet()) {
+            if (entry.getValue() != null && !entry.getValue().isEmpty()) {
+                routers.put(entry.getKey(), new Router(entry.getValue()));
+            }
+        }
     }
 
     /** Runs the plan to completion. */
@@ -117,17 +167,31 @@ public final class Executor {
 
     private RunSummary run() {
         String startedUtc = RFC3339.format(Instant.now());
-        seedSources();
-        for (StageSpec stage : plan.ordered()) {
-            runStage(stage);
+        try {
+            seedSources();
+            for (StageSpec stage : plan.ordered()) {
+                runStage(stage);
+            }
+            if (grandTotal != inputAmount) {
+                throw new AllocationException(ErrorCode.CONSERVATION_FAILED,
+                        "DAG final total " + grandTotal + " != input total " + inputAmount);
+            }
+            return new RunSummary(dataSha256, AllocationSpec.SCHEMA, "allocation-java", spec.name(),
+                    ruleSha256, startedUtc, stageSummaries, inputAmount, grandTotal, spec.precision(),
+                    poolChecks, outputRowsTotal, terminalRows, ledgerRows, "PASS", warnings);
+        } finally {
+            for (RowStore store : stores) {
+                store.close();
+            }
+            stores.clear();
+            spill.close();
         }
-        if (grandTotal != inputAmount) {
-            throw new AllocationException(ErrorCode.CONSERVATION_FAILED,
-                    "DAG final total " + grandTotal + " != input total " + inputAmount);
-        }
-        return new RunSummary(dataSha256, AllocationSpec.SCHEMA, "allocation-java", spec.name(),
-                ruleSha256, startedUtc, stageSummaries, inputAmount, grandTotal, spec.precision(),
-                poolChecks, outputRowsTotal, terminalRows, ledgerRows, "PASS", warnings);
+    }
+
+    private RowStore newStore() {
+        RowStore store = new RowStore(spill, options.maxRowsInMemory());
+        stores.add(store);
+        return store;
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -143,21 +207,16 @@ public final class Executor {
         }
         sources.sort(Utf8Order::compare);
         for (String source : sources) {
-            List<Row> rows = input.readAmounts(source);
-            long sum = 0L;
-            for (Row row : rows) {
-                sum = Overflow.addExact(sum, row.amount());
-            }
-            inputAmount = Overflow.addExact(inputAmount, sum);
             recordFingerprint(source, null);
-
-            List<Row> identified = new ArrayList<>(rows.size());
-            int ordinal = 0;
-            for (Row row : rows) {
-                ordinal++;
-                identified.add(row.withIds(new String[]{RowIds.ofSource(source, row.firstId(), ordinal)}));
-            }
-            routeRows(identified, plan.outgoing().get(source));
+            Router router = routers.get(source);
+            // Row identifiers embed the ordinal of each row in its dataset, so the count is per source
+            // and advances for every row read, including rows a routing share drops.
+            int[] ordinal = {0};
+            input.forEachAmount(source, row -> {
+                ordinal[0]++;
+                inputAmount = Overflow.addExact(inputAmount, row.amount());
+                routeRow(row.withIds(new String[]{RowIds.ofSource(source, row.firstId(), ordinal[0])}), router);
+            });
         }
     }
 
@@ -177,68 +236,85 @@ public final class Executor {
     // ---------------------------------------------------------------------------------------------
 
     private void runStage(StageSpec stage) {
-        List<Row> inputs = inbox.remove(stage.id());
-        if (inputs == null) {
-            inputs = List.of();
-        }
-        long before = sumRows(inputs);
-        boolean terminal = plan.isTerminal(stage.id());
-        stageOutRows = 0;
+        RowStore inputs = inbox.remove(stage.id());
+        RowStore buffered = null;
+        try {
+            long before = inputs == null ? 0L : inputs.total();
+            boolean terminal = plan.isTerminal(stage.id());
+            stageOutRows = 0;
+            if (!terminal) {
+                buffered = newStore();
+            }
+            Emitter emitter = new Emitter(stage.id(), terminal, buffered);
 
-        List<Row> buffered = new ArrayList<>();
-        Emitter emitter = new Emitter(stage.id(), terminal, buffered);
-        long after;
-
-        if (!stage.isEnabled() || stage.operationOrDefault() != StageOperation.ALLOCATE) {
-            if (stage.operationOrDefault() == StageOperation.MERGE) {
-                emitMergeEvidence(stage, inputs);
-                inputs = mergeRows(inputs);
-                List<Row> relabelled = new ArrayList<>(inputs.size());
-                for (Row row : inputs) {
-                    relabelled.add(row.withIds(new String[]{
-                            RowIds.of(stage.id(), "MERGED", "", row.coord().key())}));
+            if (!stage.isEnabled() || stage.operationOrDefault() != StageOperation.ALLOCATE) {
+                if (stage.operationOrDefault() == StageOperation.MERGE) {
+                    emitMergeEvidence(stage, inputs);
+                    // Coalescing is where a merge stage earns its name: duplicates are summed and the
+                    // result is emitted in coordinate order, which is what the reference does.
+                    for (Row row : coalesce(inputs).values()) {
+                        emitter.emit(row.withIds(new String[]{
+                                RowIds.of(stage.id(), "MERGED", "", row.coord().key())}));
+                    }
+                } else if (inputs != null) {
+                    inputs.forEach(emitter::emit);
                 }
-                inputs = relabelled;
+            } else {
+                // Runs even when the stage received nothing: a rule with no input still has to report
+                // the target members that would have received nothing, exactly as it always has.
+                runAllocatingStage(stage, inputs, emitter);
             }
-            for (Row row : inputs) {
-                emitter.emit(row);
+
+            long after = emitter.total;
+            if (before != after) {
+                throw new AllocationException(ErrorCode.CONSERVATION_FAILED,
+                        "total mismatch " + before + " vs " + after, stage.id(), null, null, null);
             }
-        } else {
-            runAllocatingStage(stage, inputs, emitter);
-        }
+            stageSummaries.add(new RunSummary.StageSummary(stage.id(), before, after,
+                    emitter.pools, stageOutRows));
+            outputRowsTotal += stageOutRows;
 
-        after = emitter.total;
-        if (before != after) {
-            throw new AllocationException(ErrorCode.CONSERVATION_FAILED,
-                    "total mismatch " + before + " vs " + after, stage.id(), null, null, null);
-        }
-        stageSummaries.add(new RunSummary.StageSummary(stage.id(), before, after,
-                emitter.pools, stageOutRows));
-        outputRowsTotal += stageOutRows;
-
-        if (!terminal) {
-            List<Row> merged = mergeRows(buffered);
-            linkCoalesced(buffered, merged, stage.id());
-            routeRows(merged, plan.outgoing().get(stage.id()));
+            if (!terminal) {
+                Map<String, Row> merged = coalesce(buffered);
+                linkCoalesced(buffered, merged, stage.id());
+                routeRows(merged.values(), routers.get(stage.id()));
+            }
+        } finally {
+            if (buffered != null) {
+                buffered.close();
+            }
+            if (inputs != null) {
+                inputs.close();
+            }
         }
     }
 
-    private void emitMergeEvidence(StageSpec stage, List<Row> inputs) {
-        for (Row row : inputs) {
+    /**
+     * Emits a merge stage's evidence.
+     *
+     * <p>Two passes, not one, because the ledger has an order: every {@code MERGE} lineage edge comes
+     * before every membership line. A {@link RowStore} can be replayed, so that costs a second read of
+     * the buffer instead of a second copy of it in memory.
+     */
+    private void emitMergeEvidence(StageSpec stage, RowStore inputs) {
+        if (inputs == null) {
+            return;
+        }
+        inputs.forEach(row -> {
             String mergedId = RowIds.of(stage.id(), "MERGED", "", row.coord().key());
             for (String parent : row.ids()) {
                 lineage(stage.id(), "MERGE", parent, mergedId, row.amount());
             }
-        }
-        for (Row row : inputs) {
+        });
+        inputs.forEach(row -> {
             String pool = row.coord().key();
             for (String id : row.ids()) {
                 sink.membership(new RunSink.MembershipLine(stage.id(), pool, id, row.amount()));
             }
-        }
+        });
     }
 
-    private void runAllocatingStage(StageSpec stage, List<Row> inputs, Emitter emitter) {
+    private void runAllocatingStage(StageSpec stage, RowStore inputs, Emitter emitter) {
         Map<String, MemberFilter> sourceFilters = new LinkedHashMap<>();
         for (Map.Entry<String, io.allocation.kernel.spec.FilterSpec> entry
                 : stage.source().filters().entrySet()) {
@@ -255,21 +331,23 @@ public final class Executor {
         }
 
         Map<String, PoolBucket> groups = new LinkedHashMap<>();
-        for (Row row : inputs) {
-            if (!matches(row.coord(), filterPositions, filterValues)) {
-                emitter.emit(row);
-                continue;
-            }
-            Coord pool = poolCoord(row.coord(), stage);
-            PoolBucket bucket = groups.get(pool.key());
-            if (bucket == null) {
-                bucket = new PoolBucket(pool);
-                groups.put(pool.key(), bucket);
-            }
-            for (String id : row.ids()) {
-                sink.membership(new RunSink.MembershipLine(stage.id(), pool.key(), id, row.amount()));
-            }
-            bucket.total = Overflow.addExact(bucket.total, row.amount());
+        if (inputs != null) {
+            inputs.forEach(row -> {
+                if (!matches(row.coord(), filterPositions, filterValues)) {
+                    emitter.emit(row);
+                    return;
+                }
+                Coord pool = poolCoord(row.coord(), stage);
+                PoolBucket bucket = groups.get(pool.key());
+                if (bucket == null) {
+                    bucket = new PoolBucket(pool);
+                    groups.put(pool.key(), bucket);
+                }
+                for (String id : row.ids()) {
+                    sink.membership(new RunSink.MembershipLine(stage.id(), pool.key(), id, row.amount()));
+                }
+                bucket.total = Overflow.addExact(bucket.total, row.amount());
+            });
         }
         emitter.pools = groups.size();
 
@@ -423,51 +501,59 @@ public final class Executor {
     // Routing, merging, lineage
     // ---------------------------------------------------------------------------------------------
 
-    private void routeRows(List<Row> rows, List<Plan.Route> edges) {
-        if (rows == null || rows.isEmpty() || edges == null || edges.isEmpty()) {
+    private void routeRows(Iterable<Row> rows, Router router) {
+        if (router == null) {
             return;
         }
-        if (edges.size() == 1 && edges.get(0).share() == AllocationSpec.UNIT) {
-            String to = edges.get(0).to();
-            List<Row> existing = inbox.get(to);
-            if (existing == null || existing.isEmpty()) {
-                boolean hasZero = false;
-                for (Row row : rows) {
-                    if (row.amount() == 0) {
-                        hasZero = true;
-                        break;
-                    }
-                }
-                if (!hasZero) {
-                    inbox.put(to, rows);
-                    return;
-                }
-            }
-        }
-        int n = edges.size();
-        long[] shares = new long[n];
-        String[] names = new String[n];
-        for (int i = 0; i < n; i++) {
-            shares[i] = edges.get(i).share();
-            names[i] = edges.get(i).to();
-        }
         for (Row row : rows) {
-            long[] values = Apportion.split(row.amount(), shares, names, false);
-            for (int i = 0; i < n; i++) {
-                if (values[i] != 0) {
-                    inbox.computeIfAbsent(edges.get(i).to(), k -> new ArrayList<>())
-                            .add(new Row(row.coord(), values[i], row.ids()));
-                }
+            routeRow(row, router);
+        }
+    }
+
+    /**
+     * Routes one row along its edges.
+     *
+     * <p>A zero share is a real outcome, not a rounding accident: a row whose amount is zero, or whose
+     * split assigns it nothing, contributes no membership and no amount downstream. Dropping it here
+     * keeps that rule in one place instead of spreading it across stages.
+     */
+    private void routeRow(Row row, Router router) {
+        if (router == null) {
+            return;
+        }
+        if (row.amount() == 0) {
+            return;
+        }
+        if (router.passthrough) {
+            inboxFor(router.to[0]).add(row);
+            return;
+        }
+        long[] values = Apportion.split(row.amount(), router.shares, router.to, false);
+        for (int i = 0; i < router.to.length; i++) {
+            if (values[i] != 0) {
+                inboxFor(router.to[i]).add(new Row(row.coord(), values[i], row.ids()));
             }
         }
     }
 
-    private List<Row> mergeRows(List<Row> rows) {
-        if (rows.isEmpty()) {
-            return rows;
+    private RowStore inboxFor(String stageId) {
+        return inbox.computeIfAbsent(stageId, key -> newStore());
+    }
+
+    /**
+     * Coalesces a stage's output: duplicate coordinates are summed, and the result is ordered by
+     * coordinate in UTF-8 order.
+     *
+     * <p>The first row for a coordinate wins, so a coalesced row keeps the identifier of the row that
+     * created it. That is not an implementation detail: it decides which upstream identifier appears in
+     * the {@code COALESCE} lineage edge.
+     */
+    private static Map<String, Row> coalesce(RowStore rows) {
+        TreeMap<String, Row> merged = new TreeMap<>(Utf8Order::compare);
+        if (rows == null) {
+            return merged;
         }
-        Map<String, Row> merged = new HashMap<>(rows.size() * 2);
-        for (Row row : rows) {
+        rows.forEach(row -> {
             String key = row.coord().key();
             Row existing = merged.get(key);
             if (existing == null) {
@@ -475,29 +561,23 @@ public final class Executor {
             } else {
                 merged.put(key, existing.withAmount(Overflow.addExact(existing.amount(), row.amount())));
             }
-        }
-        String[] keys = merged.keySet().toArray(new String[0]);
-        java.util.Arrays.sort(keys, Utf8Order::compare);
-        List<Row> out = new ArrayList<>(keys.length);
-        for (String key : keys) {
-            out.add(merged.get(key));
-        }
-        return out;
+        });
+        return merged;
     }
 
-    private void linkCoalesced(List<Row> inputs, List<Row> output, String stageId) {
-        Map<String, String> target = new HashMap<>(output.size() * 2);
-        for (Row row : output) {
-            if (row.ids().length > 0) {
-                target.put(row.coord().key(), row.ids()[0]);
-            }
+    private void linkCoalesced(RowStore inputs, Map<String, Row> merged, String stageId) {
+        if (inputs == null) {
+            return;
         }
-        for (Row row : inputs) {
-            String child = target.get(row.coord().key());
+        inputs.forEach(row -> {
+            Row child = merged.get(row.coord().key());
+            if (child == null) {
+                return;
+            }
             for (String parent : row.ids()) {
-                lineage(stageId, "COALESCE", parent, child, row.amount());
+                lineage(stageId, "COALESCE", parent, child.firstId(), row.amount());
             }
-        }
+        });
     }
 
     private void lineage(String stageId, String event, String parent, String child, long amount) {
@@ -505,14 +585,6 @@ public final class Executor {
             return;
         }
         sink.lineage(new RunSink.LineageLine(stageId, event, parent, child, amount));
-    }
-
-    private static long sumRows(List<Row> rows) {
-        long total = 0L;
-        for (Row row : rows) {
-            total = Overflow.addExact(total, row.amount());
-        }
-        return total;
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -596,15 +668,37 @@ public final class Executor {
         }
     }
 
+    /**
+     * One source's outgoing edges, with the split precomputed.
+     *
+     * <p>Built once per source rather than per row: a million-row dataset routed through three edges
+     * would otherwise allocate three million arrays to hold three numbers each.
+     */
+    private static final class Router {
+        final String[] to;
+        final long[] shares;
+        final boolean passthrough;
+
+        Router(List<Plan.Route> edges) {
+            this.to = new String[edges.size()];
+            this.shares = new long[edges.size()];
+            for (int i = 0; i < edges.size(); i++) {
+                to[i] = edges.get(i).to();
+                shares[i] = edges.get(i).share();
+            }
+            this.passthrough = edges.size() == 1 && edges.get(0).share() == AllocationSpec.UNIT;
+        }
+    }
+
     /** Collects a stage's output and its running total. */
     private final class Emitter {
         private final String stageId;
         private final boolean terminal;
-        private final List<Row> buffer;
+        private final RowStore buffer;
         long total;
         int pools;
 
-        Emitter(String stageId, boolean terminal, List<Row> buffer) {
+        Emitter(String stageId, boolean terminal, RowStore buffer) {
             this.stageId = stageId;
             this.terminal = terminal;
             this.buffer = buffer;

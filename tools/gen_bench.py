@@ -4,15 +4,19 @@ import os
 import sys
 
 def main():
-    if len(sys.argv) != 4:
-        print("usage: gen_bench.py <outputdir> <pools> <targets>")
+    if len(sys.argv) not in (4, 5):
+        print("usage: gen_bench.py <outputdir> <pools> <targets> [amount_rows]")
+        print("  amount_rows defaults to <pools>: one posting per pool, the smallest possible input.")
+        print("  Pass a larger number to model a ledger export: many postings rolling into few pools.")
         return 2
     out, pools, targets = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+    amount_rows = int(sys.argv[4]) if len(sys.argv) == 5 else pools
     os.makedirs(out, exist_ok=True)
 
     with open(os.path.join(out, "amounts.csv"), "w", encoding="utf-8", newline="") as handle:
         handle.write("period,plant,sku,account,currency,amount\n")
-        for p in range(pools):
+        for i in range(amount_rows):
+            p = i % pools
             period = "2026-%02d" % (p % 12 + 1)
             amount = "%d.%02d" % (100000 + p * 37, p % 100)
             handle.write("%s,P%04d,Unassigned,Cost-A,CUR,%s\n" % (period, p, amount))
@@ -57,7 +61,8 @@ def main():
 """ % (pools, targets, names))
 
     total_rows = pools * targets
-    print("wrote %s: %d pools x %d targets = %d driver rows" % (out, pools, targets, total_rows))
+    print("wrote %s: %d amount rows, %d pools x %d targets = %d driver rows"
+          % (out, amount_rows, pools, targets, total_rows))
     return 0
 
 
