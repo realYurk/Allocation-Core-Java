@@ -982,3 +982,70 @@ schema 测试里，断言它"存在"。
 **没有做的事**：没有写一个 DB 背书的 `RuleResolver` 来"填满"这张表。那是功能，不是卫生；用一个从没被要求、
 也没人验证过的功能去挽留一张空表，是把"删一张纸面表"的成本转嫁成"维护一个未经验证的规则仓库"。规则进
 数据库的诉求真的出现时，从零写一个带读写的 `RuleResolver` 更便宜，而不是给一张空表打补丁。
+
+---
+
+## D-038 用真 MySQL 跑一遍 DDL 和 JDBC 仓库——发现三处方言缺陷并修复
+
+**状态**：已接受
+
+**背景**：从 D-033 起，`SchemaConsistencyTest` 一直在证明"三份 DDL 描述同一个形状"，但它的注释里明写着一句
+自认的边界：**它不证明语法**。`allocation-mysql8.sql` 从诞生起就只被逐列比对过，从未被一个 MySQL 服务器执行过；
+`JdbcRunRepository` 也只跑在 SQLite 上。这是"三份文件一致"与"部署的那一份能跑"之间那条缝，而这条缝里正好
+藏着三处真实缺陷——本机装上 MySQL 8.0.45 后第一次真跑就全暴露了：
+
+1. **`precision` 是保留字**。MySQL 和 PostgreSQL 都保留 `PRECISION`（`CAST(x AS DOUBLE PRECISION)` 及其同类），
+   `allocation_run.precision` 这一列在 `CREATE TABLE`、`INSERT`、`SELECT` 里全部报 1064 语法错误。SQLite 不保留
+   它，所以 SQLite 测试一路绿灯，把错误留给了部署时刻。
+2. **`allocation_pool` 主键超长**。`(run_id, stage_id, pool_key)` 里 `pool_key` 是 `VARCHAR(1024)`，utf8mb4 下
+   一列就是 4096 字节，加 `run_id`(32)+`stage_id`(64) 后 4480 字节，远超 InnoDB 的 3072 字节主键上限（1071）。
+   主键不能加前缀，所以这不是调长度能救的——`VARCHAR(672)` 才勉强塞得下，而那是给坐标 key 硬安一个它语义里
+   没有的长度上限。
+3. **`VARCHAR(1024)` 是三份 DDL 里唯一的不一致**。SQLite 和 PostgreSQL 都用 `TEXT`（无上限），只有 MySQL 用
+   `VARCHAR(1024)`。这个 1024 是拍脑袋写的，`pool_key` 真实语义是"任意长度的坐标 JSON key"（最多 30 维度、
+   每维任意字符串），它不该有任何长度上限。
+
+**决策**：
+
+- **`precision` 列改名 `scale`**。三份 DDL、`JdbcRunRepository` 的 INSERT/SELECT、`rs.getInt("scale")` 一起改。
+  不改名的唯一替代是"感知方言加引用符"（MySQL 反引号、PG 双引号、SQLite 随便），那会毁掉 `JdbcRunRepository`
+  "一份 SQL 字符串跑三库"的简洁，而且双引号在 MySQL 默认 sql_mode 下是字符串字面量——加错引号比不改更糟
+  （静默返回常量而非列值）。`scale` 在三个方言都不是保留字，语义上就是"缩放的小数位数"。
+- **`allocation_pool` 主键改 `(run_id, seq)`**，`pool_key` 改 `LONGTEXT`。这跟 `allocation_line`、
+  `allocation_result` 已有的 `(run_id, seq)` 脊柱对齐——引擎本来就有单一 `++seq` 惯用法，pool 只是最后一个
+  没有享受它的表。`PoolRecord` 的 Java record 不加 `seq`（它是持久化内部细节，读回时按 `ORDER BY stage_id,
+  pool_key` 规范序，不依赖 seq）。
+
+**顺带**：kernel 的 `pom.xml` 加 `com.mysql:mysql-connector-j:8.0.33`（**test scope**，Art.1 的零运行时依赖
+不变），并新增 `JdbcMySqlTest`——用 `@EnabledIfSystemProperty(named="mysql.url")` 门控，CI 无 MySQL 自动跳过，
+有 MySQL 的开发者 `mvn test -Dtest=JdbcMySqlTest -Dmysql.url=... -Dmysql.user=... -Dmysql.password=...` 就能
+真跑。它验证的不只是 DDL 能建表，还有幂等、keyset 分页、租户隔离、utf8mb4 坐标往返、状态清扫排序在 MySQL
+上全部成立——正是"三份文件一致"永远证明不了的那一层。
+
+**没有做的事**：没有把 MySQL 测试变成 CI 强制的（CI 没有 MySQL，也不能假设它有）。`JdbcMySqlTest` 是 opt-in
+的开发期工具，不替代 `SchemaConsistencyTest` 的持续校对——后者防"忘改一份"，前者防"三份都错"，各司其职。
+
+---
+
+## D-039 坐标/池键列不设长度上限——`pool_key` 用 LONGTEXT 而非 VARCHAR(1024)
+
+**状态**：已接受
+
+**背景**：D-038 修主键超长时，根因不是"1024 选小了"，而是"给坐标 key 设长度上限"这件事本身就是错的。
+`pool_key`（以及 `allocation_line.pool_key`、`allocation_result.coordinate`）存的是 `Coord.key()`——一个
+维度成员的 JSON 数组，一个规则最多声明 30 个维度，每个成员是宿主数据的任意字符串。它天然无上界，任何
+硬编码的 `VARCHAR(n)` 都是把"引擎语义"翻译成"数据库事故"：一个 n+1 字符的成本中心，不该让一家公司的
+分摊 run 在写库时失败。
+
+**决策**：`pool_key` 在 MySQL 用 `LONGTEXT`（对齐 SQLite/PG 的 `TEXT`）。`coordinate` 同理保持 `VARCHAR(1024)`
+的那一份（`allocation_result.coordinate`）这次一并检查——它在 MySQL 是 `VARCHAR(1024)` 但**不在主键里**，
+所以没触发 1071；为一致性和去掉同样的上限，它与 pool_key 一样改为 `LONGTEXT`。
+
+**代价**：`LONGTEXT` 不能进主键也不能进普通索引（MySQL 要求前缀）。所以 `allocation_pool` 的幂等主键改走
+`seq`（D-038），而 `allocation_line` 的 `idx_line_pool` 已经在用 `pool_key(191)` 前缀索引——前缀截断的是
+"找 pool"这个查询的索引，不影响"读回完整 pool_key"（读的是行数据，不是索引）。pool 的"证据只写一次"由
+`(run_id, seq)` 主键冲突兜底，丢失的那点"同一 pool 重写"防御由 line 表的 seq 主键冲突补上（同一 run 重写，
+line 先撞）。
+
+**没有做的事**：没有给 `allocation_result.coordinate` 加索引。它从不需要按坐标查——`results` 按 `seq` 分页、
+`linesForTargets` 按 `target_key` 查 line。给一个没人按它查的列加索引，是给写放大付钱买不存在的读。

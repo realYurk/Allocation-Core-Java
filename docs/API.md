@@ -325,7 +325,10 @@ D-035：一个 run 必须能用自己执行时的那份规则来解释自己的�
 如果规则没变，照常可读；如果变了，报 `ALLOC_015` 而不是给出一个错位的答案。这正是这次迁移要响亮的信号。
 
 **金额约定**：所有 `*_amount` 列都是「10^-precision 个最小单位」的整数，precision 来自规则（0..6）。`123456` 在 precision=2 时表示 `1234.56`。用 `BIGINT` 而不是 `DECIMAL`，是为了让数据库里存的值和
-引擎里算的值是同一个整数，搬运过程中不可能发生二次舍入。
+引擎里算的值是同一个整数，搬运过程中不可能发生二次舍入。`allocation_run` 里存这个 precision 的列名叫
+`scale`，不是 `precision`——`PRECISION` 在 MySQL 和 PostgreSQL 都是保留字，而 JDBC 仓库用一份 SQL 跑三个
+方言（D-038）。`allocation_pool` 的主键是 `(run_id, seq)`，与 `allocation_line` / `allocation_result` 同一
+脊柱：`pool_key` 是任意长度的坐标键（最多 30 维度），不能进主键，`seq` 是引擎的单一递增写出序（D-038/D-039）。
 
 **幂等**：`allocation_run` 上 `(tenant_id, idempotency_key)` 的唯一约束就是幂等的实现，不是缓存。并发提交
 同 key 时，数据库只允许一个赢，另一个读到赢家。键按租户隔离（§5.2）：两家公司都把月度批次叫 `2026-01`

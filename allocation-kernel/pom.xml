@@ -41,6 +41,17 @@
       <version>3.45.1.0</version>
       <scope>test</scope>
     </dependency>
+    <!--
+      Test-scoped only, and used only by the opt-in MySQL test (JdbcMySqlTest, gated behind
+      -Dmysql.url). The shipped MySQL DDL has never been executed on a real server, so CI cannot prove
+      it; a developer with a MySQL at hand can. Never promoted to runtime: Art.1 forbids it.
+    -->
+    <dependency>
+      <groupId>com.mysql</groupId>
+      <artifactId>mysql-connector-j</artifactId>
+      <version>8.0.33</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
 </project>
