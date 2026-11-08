@@ -8,14 +8,20 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.io.TempDir;
 
 import javax.sql.DataSource;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -38,8 +44,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>What it proves is deliberately narrower than the SQLite suite (which runs every assertion on every
  * CI build): the MySQL DDL parses and creates four usable tables, and the repository's core invariants —
  * round-trip, idempotency, keyset pagination, tenant scoping, unicode coordinates, status sweep ordering
- * — hold when the SQL actually goes to MySQL. That is the gap between "the three files agree" and "the
- * deployed one works".
+ * — hold when the SQL actually goes to MySQL. The last test pushes one complete run through the full
+ * service layer, exercising the streaming evidence path ({@code RepositorySink} → batched commits) that
+ * the direct repository calls above do not touch. That is the gap between "the three files agree" and
+ * "the deployed one works".
  */
 @EnabledIfSystemProperty(named = "mysql.url", matches = ".+")
 class JdbcMySqlTest {
@@ -173,7 +181,91 @@ class JdbcMySqlTest {
                 repository.pools("mysql07"));
     }
 
+    // ---------------------------------------------------------------- end-to-end through the service layer
+
+    /**
+     * One complete run through the service, persisted in MySQL.
+     *
+     * <p>The repository tests above call {@code savePools}/{@code saveResults} directly — the bulk path.
+     * A real run writes through {@code RepositorySink} → {@code JdbcEvidenceWriter}, which batches and
+     * commits as it goes, and which is the path that most often trips over a dialect's transaction or
+     * batch semantics. This test proves that path against MySQL: submit, wait for the terminal status,
+     * and read the answer back through the database rather than from the object the service happened to
+     * hold.
+     */
+    @Test
+    void aFullRunSurvivesTheStreamingEvidencePathThroughMySQL(@TempDir Path directory) throws IOException {
+        String rule = """
+                {
+                  "schema": "allocation-ir/2.0",
+                  "rounding_policy": "LARGEST_REMAINDER_IDENTITY",
+                  "name": "mysql e2e",
+                  "precision": 2,
+                  "dimensions": ["plant", "account"],
+                  "immutable_dimensions": [],
+                  "hierarchies": {},
+                  "datasets": {
+                    "amounts": {"amounts": "amounts.csv"},
+                    "drivers": {"drivers": "drivers.csv"}
+                  },
+                  "stages": [
+                    {
+                      "id": "st1",
+                      "inputs": [{"from": "amounts", "share": "1"}],
+                      "source": {"grouping": {"plant": "AS_IS", "account": "TOTAL"}, "filters": {}},
+                      "target": {"plant": {"mode": "SOURCE"}, "account": {"mode": "INCLUDE", "include": ["A1", "A2"]}},
+                      "conservation_keys": ["plant"],
+                      "allocations": [
+                        {"id": "r1", "share": "1", "driver_dataset": "drivers", "weight_field": "weight"}
+                      ]
+                    }
+                  ]
+                }
+                """;
+        Files.writeString(directory.resolve("rule.json"), rule, StandardCharsets.UTF_8);
+        Files.writeString(directory.resolve("amounts.csv"),
+                "plant,account,amount\nP1,SRC,100.00\n", StandardCharsets.UTF_8);
+        Files.writeString(directory.resolve("drivers.csv"),
+                "plant,account,weight\nP1,A1,1\nP1,A2,1\n", StandardCharsets.UTF_8);
+
+        DefaultAllocationTemplate template = new DefaultAllocationTemplate(repository,
+                new DirectoryRuleResolver(directory), directory.resolve("work"));
+        try {
+            AllocationTemplate.SubmitResult submitted = template.submit(RunCommand.builder()
+                    .ruleCode("rule")
+                    .source(new AmountSource.Csv(directory))
+                    .build());
+            awaitTerminal(submitted.runId());
+
+            RunResult result = template.result(submitted.runId(), 1, 10);
+            assertEquals(2, result.total());
+            assertEquals(2, result.lines().size());
+            assertEquals(Map.of("plant", "P1", "account", "A1"), result.lines().get(0).coord());
+            assertEquals("50.00", result.lines().get(0).amount().format());
+            assertTrue(result.conservation().balanced());
+        } finally {
+            template.close();
+        }
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    private void awaitTerminal(String runId) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (System.nanoTime() < deadline) {
+            RunRepository.Status status = repository.find(runId).orElseThrow().status();
+            if (status.terminal()) {
+                return;
+            }
+            try {
+                Thread.sleep(5L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        }
+        throw new AssertionError("run " + runId + " did not finish within ten seconds");
+    }
 
     private static RunRepository.RunRecord run(String runId, String key, long input, long output) {
         return new RunRepository.RunRecord(runId, "rule-α", "sha-rule", null, key, "sha-request", 2,
