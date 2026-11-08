@@ -13,7 +13,7 @@
 | 对账（`io.allocation.kernel.reconcile`） | ✅ 已实现：坐标级比较、容差、重复策略、科目汇总、差异文件。**服务层与 CLI 都走分片流式实现** `ShardedReconciler`：结果分页读库、参考流式读文件、磁盘分片比较（千万行、128MB 堆，见 `docs/PERF.md`）；内存版 `Reconciler` 只用于小数据与测试 |
 | 数据库 schema（`ddl/`） | ✅ 已实现：MySQL 8 / PostgreSQL 15+ / SQLite，SQLite 版本由 `SchemaTest` 实际执行 |
 | 存储适配器 | ✅ JDBC（`JdbcRunRepository`，零运行时依赖，由 `JdbcRunRepositoryTest` 与 `JdbcServiceTest` 对真实库验证）；MyBatis 适配器可选，非必需 |
-| REST 控制器（§2）与 starter 装配（§6） | ✅ 已实现：`allocation-spring` 七个端点全通（preview / submit / status / result / explain / reconcile / cancel），错误码到 HTTP 状态在 `AllocationExceptionHandler` 里只有一张表，`stageId`/`allocationId`/`poolKey` 随错误响应返回；starter 用 `@ConditionalOnMissingBean` 装配引擎与 Web 层，宿主可整体替换。测试 24 个（`AllocationControllerTest` 19 + `AllocationAutoConfigurationTest` 5），跑真实引擎而非 mock |
+| REST 控制器（§2）与 starter 装配（§6） | ✅ 已实现并**在真实端口上验证**（`AllocationHttpTest`：`@SpringBootTest(RANDOM_PORT)`，宿主包下不扫描本组件，所有 Bean 都来自 `AutoConfiguration.imports`）：`allocation-spring` 七个端点全通（preview / submit / status / result / explain / reconcile / cancel），错误码到 HTTP 状态在 `AllocationExceptionHandler` 里只有一张表，`stageId`/`allocationId`/`poolKey` 随错误响应返回；starter 用 `@ConditionalOnMissingBean` 装配引擎与 Web 层，宿主可整体替换。测试 24 个（`AllocationControllerTest` 19 + `AllocationAutoConfigurationTest` 5），跑真实引擎而非 mock |
 | 取消（§2.7） | ✅ 已实现：`AllocationTemplate.cancel(runId)`，池批次边界生效，终态 `CANCELLED` 且**不发布**任何证据；不属于本进程的 run 返回 `false`（`ALLOC_011` 见 §3） |
 | 引擎执行器 | ✅ 已实现：金额流式读入、阶段缓冲区按预算溢写磁盘、驱动表列式常驻、池级有序并行；1000 万行金额或 100 万行驱动都在 64MB 堆内可完成（`docs/PERF.md`）。**限制**：驱动表必须整体常驻（列式，约 28 字节/行） |
 
