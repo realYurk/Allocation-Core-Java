@@ -80,7 +80,7 @@ java -jar allocation-bench/target/allocation-bench-*.jar -f 1 -wi 3 -i 5
 | Spring starter + REST contract (`docs/API.md` §2) | done, verified over a real socket |
 | JMH baseline + regression comparison | done (`docs/PERF.md` §7) |
 | Checkpoint / resume after interruption | **not done** — an interrupted run is marked `FAILED` (`ALLOC_012`), never resumed |
-| Ten-million *target* driver tables | **not done** — the table is resident, ~28 bytes per row |
+| Ten-million *target* driver tables | measured: 10,000,000 driver rows need ~1.5GB of heap (17.2s); below 1.5GB the run does not finish |
 
 Milestone-by-milestone history and the reasoning behind each decision: [`docs/PLAN.md`](docs/PLAN.md),
 [`docs/DECISIONS.md`](docs/DECISIONS.md).

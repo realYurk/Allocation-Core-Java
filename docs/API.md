@@ -15,7 +15,7 @@
 | 存储适配器 | ✅ JDBC（`JdbcRunRepository`，零运行时依赖，由 `JdbcRunRepositoryTest` 与 `JdbcServiceTest` 对真实库验证）；MyBatis 适配器可选，非必需 |
 | REST 控制器（§2）与 starter 装配（§6） | ✅ 已实现并**在真实端口上验证**（`AllocationHttpTest`：`@SpringBootTest(RANDOM_PORT)`，宿主包下不扫描本组件，所有 Bean 都来自 `AutoConfiguration.imports`）：`allocation-spring` 七个端点全通（preview / submit / status / result / explain / reconcile / cancel），错误码到 HTTP 状态在 `AllocationExceptionHandler` 里只有一张表，`stageId`/`allocationId`/`poolKey` 随错误响应返回；starter 用 `@ConditionalOnMissingBean` 装配引擎与 Web 层，宿主可整体替换。测试 24 个（`AllocationControllerTest` 19 + `AllocationAutoConfigurationTest` 5），跑真实引擎而非 mock |
 | 取消（§2.7） | ✅ 已实现：`AllocationTemplate.cancel(runId)`，池批次边界生效，终态 `CANCELLED` 且**不发布**任何证据；不属于本进程的 run 返回 `false`（`ALLOC_011` 见 §3） |
-| 引擎执行器 | ✅ 已实现：金额流式读入、阶段缓冲区按预算溢写磁盘、驱动表列式常驻、池级有序并行；1000 万行金额或 100 万行驱动都在 64MB 堆内可完成（`docs/PERF.md`）。**限制**：驱动表必须整体常驻（列式，约 28 字节/行） |
+| 引擎执行器 | ✅ 已实现：金额流式读入、阶段缓冲区按预算溢写磁盘、驱动表列式常驻、池级有序并行；1000 万行金额或 100 万行驱动都在 64MB 堆内可完成（`docs/PERF.md`）。**限制**：驱动表必须整体常驻（列式）——100 万行驱动在 64MB 内可跑，1000 万行驱动需要约 1.5GB（实测，`docs/PERF.md` §8） |
 
 本节以下的 REST 与配置契约**已经定稿**：实现时不得改字段，只能增字段。
 
