@@ -17,6 +17,11 @@
 
 > 双人并行可把日历压缩到约 60%；若由 AI 承担编码，编码耗时再压缩，但**验证耗时不可压缩**（语料比对必须真跑）。
 
+
+> **交付状态（滚动更新）**：P0–P4 与 P8 的百万行目标已完成并通过门禁；P5/P6/P7 的核心逻辑已在
+> `io.allocation.kernel.service` 与 `io.allocation.kernel.reconcile` 中实现并经测试，剩余的是适配层
+> （JDBC/MyBatis 存储、Spring starter、REST 绑定）。详细差异见每节末尾的「状态」行。
+
 ---
 
 ## 1. 模块结构
@@ -147,6 +152,8 @@ allocation-java/
 
 ### P5 证据与持久化（`evidence` + starter 持久层）
 
+> **状态**：证据文件（五件套）与 `RunRepository` 端口、内存实现、`ddl/` 三方言（已完成并被 `SchemaTest` 执行验证）；JDBC/MyBatis 适配器待做。
+
 | 项 | 内容 |
 |---|---|
 | 目标 | 用数据库承载审计，替代 189MB CSV |
@@ -167,6 +174,8 @@ allocation-java/
 
 ### P6 对账（`reconcile`）
 
+> **状态**：坐标级核对、容差、重复策略、科目汇总、`reconcile` 命令与 `POST` 服务方法已完成；分片流式实现（对应 Go `acceptance.Compare`，用于千万行）待做。
+
 | 项 | 内容 |
 |---|---|
 | 目标 | 与独立参考结果逐坐标比对 |
@@ -184,6 +193,8 @@ allocation-java/
 ---
 
 ### P7 Spring 集成（starter + rest）
+
+> **状态**：`AllocationTemplate` 及其默认实现已完成（preview/submit/status/await/explain/reconcile、幂等键、虚拟线程、有界准入）；`starter` 自动装配与 REST 控制器待做，契约见 `docs/API.md`。
 
 | 项 | 内容 |
 |---|---|

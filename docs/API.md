@@ -5,6 +5,20 @@
 
 ---
 
+## 0. 实现状态
+
+| 层 | 状态 |
+|---|---|
+| 服务层（`io.allocation.kernel.service`） | ✅ 已实现：`AllocationTemplate` 的六个方法、幂等键、虚拟线程执行、有界准入 |
+| 对账（`io.allocation.kernel.reconcile`） | ✅ 已实现：坐标级比较、容差、重复策略、科目汇总、差异文件 |
+| 数据库 schema（`ddl/`） | ✅ 已实现：MySQL 8 / PostgreSQL 15+ / SQLite，SQLite 版本由 `SchemaTest` 实际执行 |
+| 存储适配器（JDBC / MyBatis） | ⬜ `RunRepository` 端口与内存实现已完成，适配器待做 |
+| REST 控制器（§2）与 starter 装配（§6） | ⬜ 契约已冻结，按本文档实现即可；服务层是它们唯一的下游 |
+
+本节以下的 REST 与配置契约**已经定稿**：实现时不得改字段，只能增字段。
+
+---
+
 ## 1. Java 侧入口（推荐用法）
 
 ```java
@@ -14,20 +28,20 @@ public class CostAllocationService {
     private final AllocationTemplate allocation;   // 由 starter 自动装配
 
     // ① 试算：同步，单池或小批量，返回明细，不落库
-    public Preview preview(String ruleId, List<AmountRow> rows) {
+    public Preview preview(String ruleCode, List<AmountRow> rows) {
         return allocation.preview(PreviewCommand.builder()
-                .ruleId(ruleId)
+                .ruleCode(ruleCode)
                 .rows(rows)
                 .explain(true)          // 返回每行权重/分母/余数
                 .build());
     }
 
     // ② 提交：异步，返回 runId，立即返回
-    public String submit(String ruleId, AmountSource source) {
+    public String submit(String ruleCode, AmountSource source) {
         return allocation.submit(RunCommand.builder()
-                .ruleId(ruleId)
+                .ruleCode(ruleCode)
                 .source(source)                  // 可插拔：CSV / JDBC / 内存
-                .idempotencyKey("2026-01-" + ruleId)
+                .idempotencyKey("2026-01-" + ruleCode)
                 .build()).runId();
     }
 
@@ -79,7 +93,7 @@ public record ShareTrace(Money poolAmount, long weight, long denominator, int re
 
 ```json
 {
-  "ruleId": "cost-center-2026-01",
+  "ruleCode": "cost-center-2026-01",
   "rows": [
     { "coord": { "period":"2026-01", "plant":"P0", "sku":"Unassigned", "account":"Cost-A", "currency":"CUR" },
       "amount": "1234.56" }
@@ -106,7 +120,7 @@ public record ShareTrace(Money poolAmount, long weight, long denominator, int re
 
 ```json
 {
-  "ruleId": "cost-center-2026-01",
+  "ruleCode": "cost-center-2026-01",
   "source": { "type":"csv", "path":"/data/2026-01/amounts.csv" },
   "idempotencyKey": "2026-01-cost-center",
   "options": { "workers": 4, "retainLines": false, "failOnMissingTarget": false }
@@ -174,94 +188,28 @@ public record ShareTrace(Money poolAmount, long weight, long denominator, int re
 
 ---
 
-## 4. 数据库 DDL（MySQL 8，若依默认）
+## 4. 数据库 DDL
 
-```sql
-CREATE TABLE allocation_rule (
-  id            BIGINT       NOT NULL AUTO_INCREMENT,
-  tenant_id     VARCHAR(32)  NOT NULL DEFAULT '000000',
-  rule_code     VARCHAR(64)  NOT NULL,
-  rule_name     VARCHAR(128) NOT NULL,
-  schema_version VARCHAR(32) NOT NULL,
-  spec_json     JSON         NOT NULL,
-  spec_sha256   CHAR(64)     NOT NULL,
-  status        VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
-  create_by     VARCHAR(64),
-  create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_rule (tenant_id, rule_code, spec_sha256)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+DDL 是代码，只保留一份，放在 `ddl/`：
 
-CREATE TABLE allocation_run (
-  id              VARCHAR(32)  NOT NULL,
-  tenant_id       VARCHAR(32)  NOT NULL DEFAULT '000000',
-  rule_id         BIGINT       NOT NULL,
-  rule_sha256     CHAR(64)     NOT NULL,
-  idempotency_key VARCHAR(128) NOT NULL,
-  status          VARCHAR(16)  NOT NULL,
-  input_amount    DECIMAL(28,6) NOT NULL DEFAULT 0,
-  output_amount   DECIMAL(28,6) NOT NULL DEFAULT 0,
-  pool_count      INT          NOT NULL DEFAULT 0,
-  row_count       BIGINT       NOT NULL DEFAULT 0,
-  engine_version  VARCHAR(32)  NOT NULL,
-  failure_code    VARCHAR(16),
-  failure_msg     VARCHAR(512),
-  started_at      DATETIME(3),
-  finished_at     DATETIME(3),
-  create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_idem (tenant_id, idempotency_key),
-  KEY idx_status (status, create_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+| 文件 | 目标 |
+|---|---|
+| `ddl/allocation-mysql8.sql` | MySQL 8（若依默认） |
+| `ddl/allocation-postgres.sql` | PostgreSQL 15+ |
+| `ddl/allocation-sqlite.sql` | 本地与测试；由 `SchemaTest` 在 CI 中实际执行 |
 
-CREATE TABLE allocation_pool (
-  id           BIGINT      NOT NULL AUTO_INCREMENT,
-  run_id       VARCHAR(32) NOT NULL,
-  stage_id     VARCHAR(64) NOT NULL,
-  pool_key     VARCHAR(512) NOT NULL,
-  pool_amount  DECIMAL(28,6) NOT NULL,
-  output_amount DECIMAL(28,6) NOT NULL,
-  delta        DECIMAL(28,6) NOT NULL DEFAULT 0,
-  target_count INT NOT NULL DEFAULT 0,
-  PRIMARY KEY (id),
-  KEY idx_run (run_id, stage_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+五张表：`allocation_rule` / `allocation_run` / `allocation_pool` / `allocation_line` /
+`allocation_reconcile`。
 
-CREATE TABLE allocation_line (
-  id          BIGINT      NOT NULL AUTO_INCREMENT,
-  run_id      VARCHAR(32) NOT NULL,
-  stage_id    VARCHAR(64) NOT NULL,
-  target_key  VARCHAR(512) NOT NULL,
-  amount      DECIMAL(28,6) NOT NULL,
-  weight      BIGINT,
-  denominator BIGINT,
-  got_residual TINYINT(1) NOT NULL DEFAULT 0,
-  PRIMARY KEY (id),
-  KEY idx_run (run_id, stage_id),
-  KEY idx_coord (run_id, target_key(191))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+**金额约定**：所有 `*_amount` 列都是「10^-precision 个最小单位」的整数，precision 来自规则（0..6）。
+`123456` 在 precision=2 时表示 `1234.56`。用 `BIGINT` 而不是 `DECIMAL`，是为了让数据库里存的值和
+引擎里算的值是同一个整数，搬运过程中不可能发生二次舍入。
 
-CREATE TABLE allocation_reconcile (
-  id          BIGINT      NOT NULL AUTO_INCREMENT,
-  run_id      VARCHAR(32) NOT NULL,
-  ref_sha256  CHAR(64)    NOT NULL,
-  status      VARCHAR(16) NOT NULL,
-  matched     BIGINT      NOT NULL DEFAULT 0,
-  differed    BIGINT      NOT NULL DEFAULT 0,
-  missing     BIGINT      NOT NULL DEFAULT 0,
-  extra       BIGINT      NOT NULL DEFAULT 0,
-  report_path VARCHAR(512),
-  create_time DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  KEY idx_run (run_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-```
+**幂等**：`allocation_run.idempotency_key` 上的唯一约束就是幂等的实现，不是缓存。并发提交同 key 时，
+数据库只允许一个赢，另一个读到赢家。
 
-**PostgreSQL 适配**：`JSON` → `JSONB`，`DATETIME(3)` → `TIMESTAMPTZ`，`AUTO_INCREMENT` → `GENERATED BY DEFAULT AS IDENTITY`。
-
-**注意**：明细表是可选的。大结果（> 500 万行）建议 `retainLines=false`，只保留池级证据 + 归档文件。
-
----
+**明细可选**：`retainResultLines=false` 时只写 `allocation_pool`（池级证据），`allocation_line` 留空。
+超过 500 万行建议关闭明细，保留归档文件。
 
 ## 5. 配置项
 

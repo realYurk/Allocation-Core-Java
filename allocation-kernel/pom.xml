@@ -31,6 +31,16 @@
       <artifactId>jqwik</artifactId>
       <scope>test</scope>
     </dependency>
+    <!--
+      Test-scoped only: the shipped schema is verified by executing it. This does NOT put a JDBC driver
+      on the runtime classpath, and the kernel still has no runtime dependency at all.
+    -->
+    <dependency>
+      <groupId>org.xerial</groupId>
+      <artifactId>sqlite-jdbc</artifactId>
+      <version>3.45.1.0</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
 </project>
