@@ -35,7 +35,10 @@ public enum ErrorCode {
     INTERNAL("ALLOC_009"),
 
     /** Authorizer rejected the caller. */
-    FORBIDDEN("ALLOC_010");
+    FORBIDDEN("ALLOC_010"),
+
+    /** The caller cancelled the run, or the run was cancelled before it finished. Not a failure. */
+    CANCELLED("ALLOC_011");
 
     private final String code;
 

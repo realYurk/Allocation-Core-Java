@@ -59,6 +59,19 @@ public interface RunRepository {
                     Status.FAILED, inputAmount, outputAmount, poolCount, rowCount, code, message,
                     startedAtEpochMs, finishedAt);
         }
+
+        /**
+         * The run was stopped by its caller.
+         *
+         * <p>Distinct from {@code FAILED}: nothing went wrong, somebody changed their mind, and the
+         * distinction is what keeps an operator dashboard from showing a cancellation as an incident.
+         * The failure fields are cleared, since a cancellation has no error to report.
+         */
+        public RunRecord cancelled(long finishedAt) {
+            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, precision,
+                    Status.CANCELLED, inputAmount, outputAmount, poolCount, rowCount, null, null,
+                    startedAtEpochMs, finishedAt);
+        }
     }
 
     /** One pool's balance evidence. */

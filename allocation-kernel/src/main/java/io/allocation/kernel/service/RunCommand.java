@@ -1,5 +1,7 @@
 package io.allocation.kernel.service;
 
+import io.allocation.kernel.exec.Executor;
+
 /**
  * A full-run request.
  *
@@ -28,12 +30,22 @@ public record RunCommand(String ruleCode, AmountSource source, String idempotenc
      * @param retainResultLines  whether to keep terminal lines for {@code result}/{@code explain}
      * @param failOnMissingTarget whether a declared target without a driver weight blocks the run
      */
-    public record Options(int workers, boolean retainResultLines, boolean failOnMissingTarget) {
+    public record Options(int workers, boolean retainResultLines, boolean failOnMissingTarget,
+                          long maxRowsInMemory) {
 
         public Options {
             if (workers < 1) {
                 throw new IllegalArgumentException("workers must be at least 1");
             }
+            if (maxRowsInMemory < 1) {
+                throw new IllegalArgumentException("maxRowsInMemory must be at least 1");
+            }
+        }
+
+        /** Options with the engine's default spill budget. */
+        public Options(int workers, boolean retainResultLines, boolean failOnMissingTarget) {
+            this(workers, retainResultLines, failOnMissingTarget,
+                    Executor.Options.DEFAULT_MAX_ROWS_IN_MEMORY);
         }
 
         public static Options defaults() {

@@ -28,22 +28,29 @@
 
 ```
 allocation-java/
-├── pom.xml                          (parent, dependencyManagement 同时兼容 SB 3.2 / 4.x)
-├── allocation-kernel/               纯 Java 21，零第三方依赖
+├── pom.xml                          (parent, 统一 Java 21 / JUnit / Spring Boot 版本)
+├── allocation-kernel/               纯 Java 21，零第三方运行时依赖
 │   └── src/main/java/io/allocation/kernel/
-│       ├── money/        Money, Scale, Rounding, Overflow
-│       ├── apportion/    Apportion, ResidualAllocator, Identity
-│       ├── rule/         Spec(record), Stage, Target, Allocation, Filter, Hierarchy
-│       ├── plan/         Compiler, Plan, StageGraph, Route
-│       ├── exec/         Executor, PoolPlanner, PoolResult, DriverIndex, Row
-│       ├── evidence/     Ledger, Lineage, Conservation
-│       └── error/        AllocationException, ErrorCode
-├── allocation-conformance/          测试专用：golden 运行器 + 属性测试 + 有理数 oracle
-├── allocation-spring-boot-starter/  自动装配、配置属性、模板类、虚拟线程作业
-├── allocation-rest/                 Controller、DTO、OpenAPI、异常映射
-├── allocation-persistence-mybatis/  Mapper、DDL、仓储实现（可被宿主替换）
-└── allocation-example/              最小示例（含若依接入片段）
+│       ├── money/        Decimal, Apportion, Overflow
+│       ├── spec/         AllocationSpec 及其 Codec（规则即数据）
+│       ├── plan/         Planner, Plan, Router, MemberFilter
+│       ├── coord/        Coord, Utf8Order
+│       ├── exec/         Executor, PoolAllocator, RowStore, DriverTable, CsvInput, RunSink
+│       ├── io/           自有 JSON / CSV / SHA-256（StreamingCsvReader, Digests）
+│       ├── reconcile/    Reconciler（内存）, ShardedReconciler（分片流式）, AmountRows
+│       ├── service/      AllocationTemplate, DefaultAllocationTemplate, RunCommand, Money,
+│       │                 RunRepository（+ InMemory / Jdbc 两实现）, RunResult, Explain
+│       └── ddl/          mysql8 / postgres / sqlite（resource，由 SchemaTest 实际执行）
+├── allocation-conformance/          测试专用：golden 语料runner + 属性测试（129 个用例）
+└── allocation-spring/               Spring Boot 3.2 starter + REST（依赖方向只指向 kernel）
+    ├── AllocationProperties / AllocationAutoConfiguration / AllocationWebConfiguration
+    └── web/              AllocationController, ApiResponse, Api, ApiMapper, AllocationExceptionHandler
 ```
+
+**与初始计划的差异（刻意合并）**：`allocation-rest` 并入 `allocation-spring`——REST 层离开 starter 就无法装配，
+拆成两个 jar 只会让宿主多引一个依赖。`allocation-persistence-mybatis` 不做：JDBC 实现已零依赖满足需求，
+MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation-example` 的位置由 `allocation-spring` 的
+测试与 `docs/API.md` 的接入清单代替。
 
 **硬约束**：`allocation-kernel` 的 `pom.xml` 里只有 JUnit（test scope）。CI 有检查。
 
@@ -199,7 +206,14 @@ allocation-java/
 
 ### P7 Spring 集成（starter + rest）
 
-> **状态**：`AllocationTemplate` 及其默认实现已完成（preview/submit/status/await/explain/reconcile、幂等键、虚拟线程、有界准入）；`starter` 自动装配与 REST 控制器待做，契约见 `docs/API.md`。
+> **状态**：服务层 + starter + REST 已全部落地（`allocation-spring`，24 个测试，其中 19 个跑真实引擎）。
+> 已完成：`AllocationProperties`（5 个配置项，全部有默认值）、`@AutoConfiguration` 装配（引擎与 Web 分层，
+> 全部 `@ConditionalOnMissingBean`）、七个端点（preview / runs / status / result / explain / reconcile / cancel）、
+> 错误码 → HTTP 一张表（`AllocationExceptionHandler`，`stageId`/`allocationId`/`poolKey` 随响应返回）、
+> 协作式取消（`cancel(runId)`，池批次边界生效，`CANCELLED` 为独立终态）。
+> **未做（有意）**：`@EnableAllocation`（自动配置已足够，多一个注解只会多一种启用方式）、OpenAPI 文档生成
+> （契约文档是 `docs/API.md`，机器可读版本等契约稳定后一次性生成）、`AllocationAuthorizer` / `TenantProvider` SPI
+> （宿主接若依 `@PreAuthorize` 时才有意义，先留接口形状）、Micrometer 指标、`examples/ruoyi-smoke.sh`。
 
 | 项 | 内容 |
 |---|---|

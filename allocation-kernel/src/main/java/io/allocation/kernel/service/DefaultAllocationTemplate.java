@@ -37,9 +37,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The default service implementation: one rule, one input, one evidence chain.
@@ -68,6 +70,15 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     private final Path workingDirectory;
     private final Semaphore admission;
     private final ExecutorService workers;
+
+    /**
+     * Runs this process owns, and the flag that asks each one to stop.
+     *
+     * <p>The map is the definition of "owned": a run present here is executing in this process and can be
+     * stopped, a run absent from it cannot. Entries are removed when the run reaches a terminal state, so
+     * the map is bounded by the queue capacity rather than by history.
+     */
+    private final Map<String, AtomicBoolean> cancellations = new ConcurrentHashMap<>();
 
     public DefaultAllocationTemplate(RunRepository repository, RuleResolver rules, Path workingDirectory) {
         this(repository, rules, workingDirectory, 16);
@@ -160,14 +171,26 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             }
             throw e;
         }
+        // Registered before dispatch, so a cancel that arrives while the run is still queued is not lost.
+        cancellations.put(pending.runId(), new AtomicBoolean());
         workers.execute(() -> {
             try {
                 executeRun(pending, rule, spec, command, input);
             } finally {
+                cancellations.remove(pending.runId());
                 admission.release();
             }
         });
         return new SubmitResult(pending.runId(), RunRepository.Status.PENDING, false);
+    }
+
+    @Override
+    public boolean cancel(String runId) {
+        AtomicBoolean flag = cancellations.get(runId);
+        if (flag == null) {
+            return false;
+        }
+        return !flag.getAndSet(true);
     }
 
     @Override
@@ -296,12 +319,16 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     private void executeRun(RunRepository.RunRecord pending, RuleResolver.RuleDocument rule,
                             AllocationSpec spec, RunCommand command, AllocationInput data) {
         repository.update(pending.withStatus(RunRepository.Status.RUNNING));
+        AtomicBoolean cancelled = cancellations.get(pending.runId());
         RunRepository.EvidenceWriter writer = repository.openEvidence(pending.runId());
         try {
             Plan plan = Planner.compile(spec);
             RepositorySink sink = new RepositorySink(writer, command.options().retainResultLines());
             Executor.execute(plan, rule.sha256(), data, sink,
-                    new Executor.Options(command.options().workers(), command.options().failOnMissingTarget()));
+                    new Executor.Options(command.options().workers(),
+                            command.options().failOnMissingTarget(),
+                            command.options().maxRowsInMemory()),
+                    cancelled == null ? Executor.Cancellation.none() : cancelled::get);
 
             // Evidence first, status second. A poller that sees PUBLISHED can therefore always read a
             // complete result set, which is the only ordering that makes the status meaningful.
@@ -309,6 +336,12 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             repository.update(pending.published(sink.inputAmount(), sink.outputAmount(),
                     (int) sink.poolRows(), sink.resultRows(), System.currentTimeMillis()));
         } catch (AllocationException e) {
+            if (e.code() == ErrorCode.CANCELLED) {
+                // No commit, so the writer's close discards everything this run produced: a cancelled run
+                // must not leave rows that a later reader could mistake for an answer.
+                repository.update(pending.cancelled(System.currentTimeMillis()));
+                return;
+            }
             recordFailure(pending, e.code().code(), truncate(e.getMessage()), e);
         } catch (RuntimeException e) {
             recordFailure(pending, ErrorCode.INTERNAL.code(), truncate(String.valueOf(e)), e);

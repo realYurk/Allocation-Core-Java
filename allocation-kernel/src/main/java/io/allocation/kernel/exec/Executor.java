@@ -106,6 +106,26 @@ public final class Executor {
         }
     }
 
+    /**
+     * Cooperative cancellation.
+     *
+     * <p>Checked at stage boundaries and between batches of pools, never inside one: a pool is the unit
+     * that must not be half-allocated, so the safe moment to stop is the moment after one finished. A
+     * run that observes cancellation throws {@link ErrorCode#CANCELLED} and therefore publishes nothing,
+     * which is the same guarantee a failed run gives — no reader can mistake a stopped run for a
+     * complete one.
+     */
+    @FunctionalInterface
+    public interface Cancellation {
+
+        boolean cancelled();
+
+        /** Never cancelled; what every existing caller gets. */
+        static Cancellation none() {
+            return () -> false;
+        }
+    }
+
     private static final DateTimeFormatter RFC3339 =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
 
@@ -116,6 +136,7 @@ public final class Executor {
     private final AllocationSpec spec;
     private final String[] dimensionNames;
     private final String ruleSha256;
+    private final Cancellation cancellation;
 
     private final Map<String, RowStore> inbox = new HashMap<>();
     private final Map<String, Router> routers = new HashMap<>();
@@ -134,9 +155,11 @@ public final class Executor {
     private long poolChecks;
     private long stageOutRows;
 
-    private Executor(Plan plan, String ruleSha256, AllocationInput input, RunSink sink, Options options) {
+    private Executor(Plan plan, String ruleSha256, AllocationInput input, RunSink sink, Options options,
+                     Cancellation cancellation) {
         this.plan = plan;
         this.ruleSha256 = ruleSha256 == null ? "" : ruleSha256;
+        this.cancellation = cancellation == null ? Cancellation.none() : cancellation;
         this.input = input;
         this.sink = sink;
         this.options = options;
@@ -152,7 +175,18 @@ public final class Executor {
     /** Runs the plan to completion. */
     public static RunSummary execute(Plan plan, String ruleSha256, AllocationInput input, RunSink sink,
                                      Options options) {
-        return new Executor(plan, ruleSha256, input, sink, options).run();
+        return execute(plan, ruleSha256, input, sink, options, Cancellation.none());
+    }
+
+    /**
+     * Runs the plan, stopping between pool batches when {@code cancellation} says so.
+     *
+     * <p>Nothing is sunk after the stop, so a cancelled run leaves the sink exactly as a failed run
+     * would: whatever had already been written, and no committed answer.
+     */
+    public static RunSummary execute(Plan plan, String ruleSha256, AllocationInput input, RunSink sink,
+                                     Options options, Cancellation cancellation) {
+        return new Executor(plan, ruleSha256, input, sink, options, cancellation).run();
     }
 
     /** Runs without a rule digest; the summary records an empty hash. */
@@ -170,6 +204,7 @@ public final class Executor {
         try {
             seedSources();
             for (StageSpec stage : plan.ordered()) {
+                throwIfCancelled(stage.id());
                 runStage(stage);
             }
             if (grandTotal != inputAmount) {
@@ -611,6 +646,18 @@ public final class Executor {
     // Bounded, ordered pool parallelism
     // ---------------------------------------------------------------------------------------------
 
+    /**
+     * Stops the run when the caller has asked it to stop.
+     *
+     * <p>The exception names the stage or pool that was about to be computed, because "cancelled" on its
+     * own does not answer the only follow-up question anyone asks: how far did it get.
+     */
+    private void throwIfCancelled(String where) {
+        if (cancellation.cancelled()) {
+            throw new AllocationException(ErrorCode.CANCELLED, "run cancelled before " + where, where, null, null, null);
+        }
+    }
+
     private void forEachPool(List<String> keys, PoolWork work, PoolConsumer consume) {
         if (keys.isEmpty()) {
             return;
@@ -625,6 +672,7 @@ public final class Executor {
 
         if (workers <= 1) {
             for (String key : keys) {
+                throwIfCancelled(key);
                 PoolAllocator.Outcome outcome = work.compute(key);
                 consume.accept(key, outcome);
             }
@@ -639,6 +687,9 @@ public final class Executor {
         try {
             int batchSize = workers * 2;
             for (int start = 0; start < keys.size(); start += batchSize) {
+                // Between batches rather than between keys: a batch is computed concurrently, so the
+                // only place a stop order can be honoured without emitting out of order is here.
+                throwIfCancelled(keys.get(start));
                 int end = Math.min(start + batchSize, keys.size());
                 List<Future<PoolAllocator.Outcome>> futures = new ArrayList<>(end - start);
                 for (int i = start; i < end; i++) {

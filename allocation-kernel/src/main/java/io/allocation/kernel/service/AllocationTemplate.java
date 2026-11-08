@@ -35,6 +35,19 @@ public interface AllocationTemplate {
     ReconcileOutcome reconcile(ReconcileCommand command);
 
     /**
+     * Asks a queued or running run to stop.
+     *
+     * <p>Cooperative, not preemptive: the run stops at the next pool batch boundary, keeps every pool it
+     * already finished in its own accounting, and publishes nothing. Returns {@code false} when there is
+     * nothing to cancel — the run has already reached a terminal state, is unknown, or is not owned by
+     * this process (a run left {@code RUNNING} by a previous process cannot be stopped from here, and
+     * saying otherwise would be a promise this call cannot keep).
+     *
+     * @return {@code true} if the stop order was accepted, meaning the run will end {@code CANCELLED}
+     */
+    boolean cancel(String runId);
+
+    /**
      * Submission receipt.
      *
      * @param idempotentReplay true when the key had already been used and nothing was recomputed

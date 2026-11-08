@@ -321,3 +321,60 @@ MySQL 8 / PostgreSQL 上可接受。
 - 重复驱动行的告警仍然要为每行构造一次 `Coord` 来判重（瞬时，不保留）。要彻底免掉得给表加一个
   "按坐标排序的索引"，那是一次性 O(n log n) 排序，等告警本身变成瓶颈再说。
 - 千万级目标坐标没有测过：理论上限仍是"整张表常驻"，只是每行便宜了三倍。
+
+---
+
+## D-019 取消是协作式的，且"CANCELLED"不是"FAILED"的一种
+
+**状态**：已接受
+
+**背景**：`docs/API.md` §2.7 从第一版就写着"协作式取消：设置取消令牌，池边界检查"。真正实现时要回答三个
+不好改的问题：在哪检查、状态怎么记、记不了的时候怎么回答。
+
+**决策**：
+
+1. **在池批次边界检查，不池内检查**。`Executor.forEachPool` 每批并发池开始前查一次令牌（顺序分支则每个池
+   前查一次）。池是"不可半分配"的单位——一个池要么整池产出，要么不产出。若在池内检查，就要么发布半个池
+   （守恒不成立），要么丢弃同一批里已经算完的池（调用方看到的进度与代数对不上）。
+2. **`CANCELLED` 是独立终态，不写 `failureCode`**。它是"有人改主意"，不是"算错了"。运维看板上两者必须分开，
+   否则每次取消都变成一次事故。因此 `RunRecord.cancelled(...)` 清空失败字段，与 `failed(...)` 并列。
+3. **不提交证据**。取消路径不调用 `EvidenceWriter.commit()`，`close()` 丢弃已写内容（D-015 的同一个机制）。
+   于是"取消的 run 查不到结果"不是靠状态判断挡住的，而是**根本没有结果**——状态只是解释原因。
+4. **不属于本进程的 run 返回 `false`**。取消令牌是进程内的 `AtomicBoolean`，与 run 同生共死。上一个进程留下
+   的 `RUNNING` 记录没有任何人持有令牌，声称成功是最坏的回答：调用方会去轮询一个永远不会变的 run。
+   正确做法是返回 `false`，由 P9 的中断恢复去处理那条记录。
+
+**已知代价**：
+
+- 停止的及时性由池的粒度决定：一个池要分摊一秒，取消最多晚一秒生效。要更快就得让 `PoolAllocator` 内部
+  可中断，那会在最热的循环里引入一次 volatile 读——不支持。
+- 取消令牌不持久化，因此"重启后取消"不支持（见上第 4 点）。
+- `ALLOC_011` 是新增错误码（Art.15：同一次提交内更新 `docs/API.md` §3）。
+
+---
+
+## D-020 Web 层由自动配置注册成 Bean，不依赖组件扫描
+
+**状态**：已接受
+
+**背景**：starter 的包 `io.allocation.spring` 不在宿主的扫描路径上（若依扫描 `com.ruoyi`）。写在
+`@Component`/`@RestController` 上的类在作者自己的测试里会被扫描到，在宿主的工程里不会——这是最容易在交付
+半年后才发现的缺陷。
+
+**决策**：`AllocationWebConfiguration` 是一个 `@AutoConfiguration`，通过
+`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 注册，用
+`@Bean` + `@ConditionalOnMissingBean` 声明 `AllocationController` 与 `AllocationExceptionHandler`，
+并用 `@ConditionalOnWebApplication(SERVLET)` 限制在 Web 应用内。
+
+**理由**：
+
+1. **能被替换**。宿主想加审计端点，继承控制器声明自己的 Bean 即可，不需要与 starter 抢所有权。
+2. **批处理进程不会装配一个永远不会被访问的 `@RequestMapping`**，也不需要在批处理里排除 Web 依赖。
+3. **advice 作为 Bean 就能生效**：Spring 的异常解析器从上下文收集 `@ControllerAdvice` Bean，扫描与声明等价。
+   `AllocationAutoConfigurationTest` 用 `WebApplicationContextRunner` 把这条验证钉住。
+
+**顺带定下的一条**：`@PathVariable` / `@RequestParam` 一律显式命名，同时在父 pom 打开 `-parameters`。
+两者都做，是因为前者让契约不依赖编译参数，后者让 Spring 的默认行为生效——只做一半的工程，会在别人用别的
+编译参数重建时坏掉。
+
+**已知代价**：多一个配置类，`AutoConfiguration.imports` 里多一行。可接受。

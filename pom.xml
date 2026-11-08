@@ -21,11 +21,13 @@
     <surefire.version>3.2.5</surefire.version>
     <compiler.version>3.13.0</compiler.version>
     <jar.version>3.4.1</jar.version>
+    <spring-boot.version>3.2.3</spring-boot.version>
   </properties>
 
   <modules>
     <module>allocation-kernel</module>
     <module>allocation-conformance</module>
+    <module>allocation-spring</module>
   </modules>
 
   <dependencyManagement>
@@ -53,6 +55,13 @@
           <artifactId>maven-compiler-plugin</artifactId>
           <version>${compiler.version}</version>
           <configuration>
+            <!--
+              Spring resolves @PathVariable and @RequestParam by parameter name unless the annotation
+              names them. This flag is what makes the framework's default work; the annotations in the
+              web layer are named anyway, so a host that rebuilds the sources with different compiler
+              settings still gets a working contract.
+            -->
+            <parameters>true</parameters>
             <compilerArgs>
               <arg>-Xlint:all</arg>
               <arg>-Xlint:-processing</arg>
