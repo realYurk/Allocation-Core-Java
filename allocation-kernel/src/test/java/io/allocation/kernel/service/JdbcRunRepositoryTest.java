@@ -228,6 +228,57 @@ class JdbcRunRepositoryTest {
     }
 
     @Test
+    void committedEvidenceBecomesVisible() {
+        repository.insert(run("01W", null, 0L, 0L));
+
+        RunRepository.EvidenceWriter writer = repository.openEvidence("01W");
+        writer.pool(new RunRepository.PoolRecord("st1", "[\"P1\"]", 100L, 100L, 2));
+        writer.result(new RunSink.ResultLine("st1", "row-1", new Coord(new String[]{"P1", "A1"}), 60L));
+        writer.commit();
+        writer.close();
+
+        assertEquals(1, repository.pools("01W").size());
+        assertEquals(1, repository.resultCount("01W"));
+    }
+
+    @Test
+    void uncommittedEvidenceIsDiscardedRatherThanLeftHalfWritten() {
+        repository.insert(run("01DISCARD", null, 0L, 0L));
+
+        RunRepository.EvidenceWriter writer = repository.openEvidence("01DISCARD");
+        writer.pool(new RunRepository.PoolRecord("st1", "[\"P1\"]", 100L, 100L, 2));
+        writer.result(new RunSink.ResultLine("st1", "row-1", new Coord(new String[]{"P1", "A1"}), 60L));
+        // No commit: this is what a run that failed mid-stage looks like.
+        writer.close();
+
+        assertEquals(0, repository.pools("01DISCARD").size(),
+                "a failed run must not leave evidence that looks like an answer");
+        assertEquals(0, repository.resultCount("01DISCARD"));
+    }
+
+    @Test
+    void evidenceSpanningSeveralBatchesKeepsOrderAndCount() {
+        repository.insert(run("01BATCH", null, 0L, 0L));
+
+        RunRepository.EvidenceWriter writer = repository.openEvidence("01BATCH");
+        int rows = 2_500; // more than two batch flushes at 1000 rows
+        for (int i = 0; i < rows; i++) {
+            writer.result(new RunSink.ResultLine("st1", "row-" + i,
+                    new Coord(new String[]{"P1", "A" + i}), i));
+        }
+        writer.commit();
+        writer.close();
+
+        assertEquals(rows, repository.resultCount("01BATCH"));
+        List<RunSink.ResultLine> first = repository.results("01BATCH", 0, 3);
+        assertEquals(List.of("row-0", "row-1", "row-2"),
+                first.stream().map(RunSink.ResultLine::rowId).toList());
+        List<RunSink.ResultLine> tail = repository.results("01BATCH", rows - 2, 2);
+        assertEquals(List.of("row-2498", "row-2499"),
+                tail.stream().map(RunSink.ResultLine::rowId).toList());
+    }
+
+    @Test
     void readingAnUnknownRunYieldsNothingRatherThanAnError() {
         Optional<RunRepository.RunRecord> none = repository.find("does-not-exist");
 

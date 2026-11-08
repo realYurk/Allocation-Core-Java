@@ -65,6 +65,41 @@ public interface RunRepository {
     record PoolRecord(String stageId, String poolKey, long inputAmount, long outputAmount, int targetCount) {
     }
 
+    /**
+     * Streaming writer for one run's evidence.
+     *
+     * <p>Exists because a run cannot be required to hold its results in memory until the end: at a
+     * million rows that is hundreds of megabytes, and at ten million it does not fit at all. A writer is
+     * obtained before execution, fed as rows are produced, and committed once.
+     *
+     * <p>Two guarantees make this safe to read while a run is in flight:
+     *
+     * <ul>
+     *   <li>The service never reports a run as {@code PUBLISHED} before {@link EvidenceWriter#commit()},
+     *       so a reader that respects the status can never observe half a result set.</li>
+     *   <li>Closing without committing discards everything written, so a failed run leaves no rows
+     *       behind to be mistaken for an answer.</li>
+     * </ul>
+     */
+    interface EvidenceWriter extends AutoCloseable {
+
+        void pool(PoolRecord record);
+
+        void line(RunSink.LedgerLine line);
+
+        void result(RunSink.ResultLine line);
+
+        /** Makes everything written so far durable. Call exactly once, before the run is published. */
+        void commit();
+
+        /** Releases resources; discards the evidence when {@link #commit()} was never called. */
+        @Override
+        void close();
+    }
+
+    /** Opens a writer for a run that is about to execute. */
+    EvidenceWriter openEvidence(String runId);
+
     Optional<RunRecord> find(String runId);
 
     Optional<RunRecord> findByIdempotencyKey(String idempotencyKey);
@@ -74,6 +109,12 @@ public interface RunRepository {
 
     void update(RunRecord run);
 
+    /**
+     * Bulk-loads evidence in one call.
+     *
+     * <p>For importing an artefact produced elsewhere — an archive, a replay, a test. A run uses
+     * {@link #openEvidence} instead, because it produces rows one at a time and cannot hold them.
+     */
     void savePools(String runId, List<PoolRecord> pools);
 
     void saveLines(String runId, List<RunSink.LedgerLine> lines);

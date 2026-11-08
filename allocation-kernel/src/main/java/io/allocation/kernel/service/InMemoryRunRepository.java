@@ -27,6 +27,50 @@ public final class InMemoryRunRepository implements RunRepository {
     private final Map<String, List<RunSink.ResultLine>> results = new ConcurrentHashMap<>();
 
     @Override
+    public EvidenceWriter openEvidence(String runId) {
+        return new EvidenceWriter() {
+            private final List<PoolRecord> poolRows = new ArrayList<>();
+            private final List<RunSink.LedgerLine> lineRows = new ArrayList<>();
+            private final List<RunSink.ResultLine> resultRows = new ArrayList<>();
+            private boolean committed;
+
+            @Override
+            public void pool(PoolRecord record) {
+                poolRows.add(record);
+            }
+
+            @Override
+            public void line(RunSink.LedgerLine line) {
+                lineRows.add(line);
+            }
+
+            @Override
+            public void result(RunSink.ResultLine line) {
+                resultRows.add(line);
+            }
+
+            @Override
+            public void commit() {
+                if (committed) {
+                    // Publishing twice would let a second run overwrite a published one's evidence.
+                    throw new AllocationException(ErrorCode.INTERNAL,
+                            "evidence for " + runId + " was committed twice");
+                }
+                committed = true;
+                pools.put(runId, List.copyOf(poolRows));
+                lines.put(runId, List.copyOf(lineRows));
+                results.put(runId, List.copyOf(resultRows));
+            }
+
+            @Override
+            public void close() {
+                // Nothing was stored before commit, so there is nothing to discard: an uncommitted
+                // writer's rows become garbage along with it.
+            }
+        };
+    }
+
+    @Override
     public Optional<RunRecord> find(String runId) {
         return Optional.ofNullable(runs.get(runId));
     }

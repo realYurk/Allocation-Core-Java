@@ -47,6 +47,8 @@ import java.util.Optional;
  */
 public final class JdbcRunRepository implements RunRepository {
 
+    private static final System.Logger LOG = System.getLogger(JdbcRunRepository.class.getName());
+
     /** Rows per JDBC batch. Large enough to amortise the round trip, small enough to bound driver memory. */
     private static final int BATCH_SIZE = 1_000;
 
@@ -123,6 +125,203 @@ public final class JdbcRunRepository implements RunRepository {
     public JdbcRunRepository(DataSource dataSource, String engineVersion) {
         this.dataSource = dataSource;
         this.engineVersion = engineVersion;
+    }
+
+    // ---------------------------------------------------------------- evidence writer
+
+    @Override
+    public EvidenceWriter openEvidence(String runId) {
+        try {
+            Connection connection = dataSource.getConnection();
+            connection.setAutoCommit(false);
+            return new JdbcEvidenceWriter(runId, connection);
+        } catch (SQLException e) {
+            throw translate("open an evidence writer", e);
+        }
+    }
+
+    /**
+     * Writes evidence in batches, committing as it goes.
+     *
+     * <p>Committing per batch rather than once at the end is deliberate: a single transaction covering
+     * ten million rows holds that much undo log and locks that many pages, which is a database incident
+     * rather than a run. Partial evidence is safe here because nothing reads it until the run is
+     * published, and because {@link #close()} removes it when the run did not finish.
+     */
+    private final class JdbcEvidenceWriter implements EvidenceWriter {
+
+        private final String runId;
+        private final Connection connection;
+        private final PreparedStatement poolStatement;
+        private final PreparedStatement lineStatement;
+        private final PreparedStatement resultStatement;
+        private long seq;
+        private int pending;
+        private boolean committed;
+        private boolean closed;
+
+        JdbcEvidenceWriter(String runId, Connection connection) throws SQLException {
+            this.runId = runId;
+            this.connection = connection;
+            this.poolStatement = connection.prepareStatement(INSERT_POOL);
+            this.lineStatement = connection.prepareStatement(INSERT_LINE);
+            this.resultStatement = connection.prepareStatement(INSERT_RESULT);
+        }
+
+        @Override
+        public void pool(PoolRecord record) {
+            try {
+                poolStatement.setString(1, runId);
+                poolStatement.setString(2, record.stageId());
+                poolStatement.setString(3, record.poolKey());
+                poolStatement.setLong(4, record.inputAmount());
+                poolStatement.setLong(5, record.outputAmount());
+                poolStatement.setInt(6, record.targetCount());
+                poolStatement.addBatch();
+                count();
+            } catch (SQLException e) {
+                throw translate("write pool evidence", e);
+            }
+        }
+
+        @Override
+        public void line(RunSink.LedgerLine line) {
+            try {
+                lineStatement.setString(1, runId);
+                lineStatement.setLong(2, ++seq);
+                lineStatement.setString(3, line.stage());
+                lineStatement.setString(4, line.rule());
+                lineStatement.setString(5, line.pool());
+                lineStatement.setString(6, line.target());
+                lineStatement.setString(7, line.targetRowId());
+                lineStatement.setLong(8, line.poolAmount());
+                lineStatement.setLong(9, line.shareAmount());
+                lineStatement.setLong(10, line.driverWeight());
+                lineStatement.setLong(11, line.driverDenominator());
+                lineStatement.setLong(12, line.allocatedAmount());
+                lineStatement.addBatch();
+                count();
+            } catch (SQLException e) {
+                throw translate("write ledger evidence", e);
+            }
+        }
+
+        @Override
+        public void result(RunSink.ResultLine line) {
+            try {
+                resultStatement.setString(1, runId);
+                resultStatement.setLong(2, ++seq);
+                resultStatement.setString(3, line.stage());
+                resultStatement.setString(4, line.rowId());
+                resultStatement.setString(5, line.coord().key());
+                resultStatement.setLong(6, line.amount());
+                resultStatement.addBatch();
+                count();
+            } catch (SQLException e) {
+                throw translate("write results", e);
+            }
+        }
+
+        private void count() throws SQLException {
+            if (++pending >= BATCH_SIZE) {
+                flush();
+            }
+        }
+
+        private void flush() throws SQLException {
+            poolStatement.executeBatch();
+            lineStatement.executeBatch();
+            resultStatement.executeBatch();
+            connection.commit();
+            pending = 0;
+        }
+
+        @Override
+        public void commit() {
+            if (committed) {
+                throw new AllocationException(ErrorCode.INTERNAL,
+                        "evidence for " + runId + " was committed twice");
+            }
+            try {
+                flush();
+                committed = true;
+            } catch (SQLException e) {
+                throw translate("commit evidence", e);
+            }
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            try {
+                if (!committed) {
+                    try {
+                        connection.rollback();
+                    } catch (SQLException ignored) {
+                        // The rollback failing is not interesting; the discard below is what matters.
+                    }
+                    discardEvidence(runId, connection);
+                }
+            } finally {
+                closeQuietly(resultStatement, lineStatement, poolStatement, connection);
+            }
+        }
+    }
+
+    /**
+     * Removes whatever a failed run wrote.
+     *
+     * <p>Runs on the writer's own connection when it still works, and on a fresh one otherwise. A failure
+     * to discard is logged rather than thrown: it must not replace the error that caused the run to fail.
+     */
+    private void discardEvidence(String runId, Connection preferred) {
+        String[] statements = {
+                "DELETE FROM allocation_result WHERE run_id = ?",
+                "DELETE FROM allocation_line WHERE run_id = ?",
+                "DELETE FROM allocation_pool WHERE run_id = ?"};
+        Connection connection = preferred;
+        boolean owned = false;
+        try {
+            if (connection == null || connection.isClosed()) {
+                connection = dataSource.getConnection();
+                owned = true;
+                connection.setAutoCommit(false);
+            }
+            for (String sql : statements) {
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    statement.setString(1, runId);
+                    statement.executeUpdate();
+                }
+            }
+            connection.commit();
+        } catch (SQLException e) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "run " + runId + " failed and its partial evidence could not be discarded", e);
+        } finally {
+            if (owned && connection != null) {
+                try {
+                    connection.close();
+                } catch (SQLException ignored) {
+                    // Closing a connection we already failed to use adds nothing.
+                }
+            }
+        }
+    }
+
+    private static void closeQuietly(AutoCloseable... resources) {
+        for (AutoCloseable resource : resources) {
+            if (resource == null) {
+                continue;
+            }
+            try {
+                resource.close();
+            } catch (Exception ignored) {
+                // Closing on the failure path; the caller already has the real error.
+            }
+        }
     }
 
     // ---------------------------------------------------------------- runs

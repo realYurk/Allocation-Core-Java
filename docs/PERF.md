@@ -24,7 +24,7 @@
 | Go 参考实现 | 6.18s | 3.88s | — |
 | 本实现 | 3.24s | **2.32s** | 256MB |
 
-256MB 是这台设计当前的**真实下限**：192MB 会 OOM。原因不是算术，而是服务层把证据（结果、账本、守恒、血缘）先收在内存里再落盘/落库；改成流式 sink 是 M4 的工作，不是调参能解决的。
+256MB 是当前的**真实下限**：192MB 会 OOM。原因不是算术——复测（`-Xmx128m` / `96m` / `64m`，全部 `OutOfMemoryError`）确认瓶颈是**执行器**自己：`seedSources()` 把整个源表读成 `List<Row>`，每个非终结阶段又把输出 `buffered` 成另一个 `List<Row>`。证据落盘早已是流式的（`CsvDirectorySink` 直接写文件），所以把 sink 改流式并不能降低这个数字；要降下去必须让执行器本身不持有整表，见第 5 节。
 
 ---
 
@@ -57,13 +57,39 @@
 
 ---
 
-## 4. 复现
+## 4. 证据写入：流式 sink 的堆上限
+
+`RunRepository.EvidenceWriter` 让一次运行的证据边产生边写库，不再先攒成一个内存对象再落库。测法：对 SQLite 写入 N 条 `allocation_result`，`-Xmx64m -XX:+UseSerialGC`，写完后用 `SELECT COUNT(*)` 核对条数。
+
+| 证据行数 | 堆 | 耗时 | 核对 |
+|---|---|---|---|
+| 200,000 | 64MB | 0.50s | 200,000 |
+| 1,000,000 | **64MB** | 1.88s | 1,000,000 |
+| 5,000,000 | **64MB** | 9.36s | 5,000,000 |
+
+三行用的是同一个 64MB 堆，行数翻 25 倍耗时线性增长而堆不变——这就是批量提交（每 1000 行一批、每批提交）的直接结果：峰值内存跟着**批次大小**走，不跟着输出规模走。
+
+注意这里测的是**机制**，不是数据库吞吐。SQLite 单文件、`synchronous=OFF`，写吞吐远高于真实 MySQL 事务日志落盘的开销；数字的意义是"堆不涨"，不是"MySQL 能跑多快"。
+
+---
+
+## 5. 复现
 
 ```bash
 # 引擎基准（先生成数据）
 python tools/gen_bench.py .bench/engine 1000000 1000 1000
 java -cp allocation-kernel/target/classes io.allocation.kernel.AllocationCli \
      run .bench/engine/rule.json .bench/engine/out --workers 4
+
+# 引擎在更小堆下的行为（当前会 OOM，M4 之后应当不再 OOM）
+java -Xmx128m -XX:+UseSerialGC -cp allocation-kernel/target/classes \
+     io.allocation.kernel.AllocationCli run .bench/engine/rule.json .bench/engine/out-128m --workers 4
+
+# 证据写入（需要 sqlite-jdbc 与 slf4j-api，它们只在测试作用域里）
+CP="allocation-kernel/target/classes:$(find ~/.m2/repository/org/xerial/sqlite-jdbc \
+     ~/.m2/repository/org/slf4j/slf4j-api -name '*.jar' ! -name '*sources*' | paste -sd: -)"
+javac -cp "$CP" -d .bench/bench-classes tools/bench/EvidenceBench.java
+java -Xmx64m -XX:+UseSerialGC -cp "$CP:.bench/bench-classes" EvidenceBench 1000000
 
 # 对账基准
 python tools/gen_reconcile_bench.py .bench/reconcile 1000000
@@ -86,9 +112,10 @@ java -Xmx128m -XX:+UseSerialGC -cp allocation-kernel/target/classes \
 
 ---
 
-## 5. 明确没有测过的
+## 6. 明确没有测过的
 
 - MySQL / PostgreSQL 的写入吞吐（`JdbcRunRepository` 只验证了正确性，没有压测）。
 - Spring 容器与 HTTP 层的开销（starter 尚未实现）。
 - 多进程并发提交下的吞吐（有界准入的行为有测试，吞吐没有）。
-- 10M 行**分摊**（不是对账）。引擎目前仍受第 1 节的缓冲上限约束，真正的 10M 分摊要等 M4 的流式 sink。
+- 10M 行**分摊**（不是对账）。执行器仍把源表读成行列表，第 1 节的堆下限就是它造成的；M4 的流式执行器落地后这一条会被替换成数字。
+

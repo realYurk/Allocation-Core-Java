@@ -51,9 +51,11 @@ import java.util.concurrent.Semaphore;
  * bounded by a semaphore, so a burst of submissions is refused with {@code ALLOC_007} instead of
  * growing an unbounded queue until the process dies.
  *
- * <p>Known limit of this milestone: a run's evidence is collected in memory before it is persisted, and
- * progress is reported at completion rather than continuously. Both are replaced by the streaming sink
- * and executor callbacks in M4; neither changes the contract above.
+ * <p>A run's evidence is written as it is produced, not collected and saved at the end: the sink forwards
+ * each row to a {@link RunRepository.EvidenceWriter}, so the cost of a run is bounded by the rows the
+ * executor holds for a stage, not by the size of its output. The remaining known limit is that progress
+ * is reported at completion rather than continuously; that needs callbacks from the executor and changes
+ * nothing in the contract above.
  */
 public final class DefaultAllocationTemplate implements AllocationTemplate, AutoCloseable {
 
@@ -285,38 +287,25 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     private void executeRun(RunRepository.RunRecord pending, RuleResolver.RuleDocument rule,
                             AllocationSpec spec, RunCommand command, AllocationInput data) {
         repository.update(pending.withStatus(RunRepository.Status.RUNNING));
+        RunRepository.EvidenceWriter writer = repository.openEvidence(pending.runId());
         try {
             Plan plan = Planner.compile(spec);
-            MemorySink sink = MemorySink.full();
+            RepositorySink sink = new RepositorySink(writer, command.options().retainResultLines());
             Executor.execute(plan, rule.sha256(), data, sink,
                     new Executor.Options(command.options().workers(), command.options().failOnMissingTarget()));
 
-            Map<String, Integer> targetsPerPool = new HashMap<>();
-            for (RunSink.LedgerLine line : sink.ledger()) {
-                targetsPerPool.merge(line.stage() + '\u0000' + line.pool(), 1, Integer::sum);
-            }
-            List<RunRepository.PoolRecord> pools = new ArrayList<>(sink.reconciliation().size());
-            long input = 0L;
-            long output = 0L;
-            for (RunSink.ReconciliationLine line : sink.reconciliation()) {
-                input += line.inputAmount();
-                output += line.outputAmount();
-                pools.add(new RunRepository.PoolRecord(line.stage(), line.pool(), line.inputAmount(),
-                        line.outputAmount(), targetsPerPool.getOrDefault(line.stage() + '\u0000' + line.pool(), 0)));
-            }
-            // Evidence is written before the status flips, so a poller can never observe PUBLISHED and
-            // then find no results.
-            repository.savePools(pending.runId(), pools);
-            if (command.options().retainResultLines()) {
-                repository.saveLines(pending.runId(), sink.ledger());
-                repository.saveResults(pending.runId(), sink.results());
-            }
-            repository.update(pending.published(input, output, pools.size(), sink.results().size(),
-                    System.currentTimeMillis()));
+            // Evidence first, status second. A poller that sees PUBLISHED can therefore always read a
+            // complete result set, which is the only ordering that makes the status meaningful.
+            writer.commit();
+            repository.update(pending.published(sink.inputAmount(), sink.outputAmount(),
+                    (int) sink.poolRows(), sink.resultRows(), System.currentTimeMillis()));
         } catch (AllocationException e) {
             recordFailure(pending, e.code().code(), truncate(e.getMessage()), e);
         } catch (RuntimeException e) {
             recordFailure(pending, ErrorCode.INTERNAL.code(), truncate(String.valueOf(e)), e);
+        } finally {
+            // No-op after a successful commit; otherwise it discards whatever the failed run wrote.
+            writer.close();
         }
     }
 
