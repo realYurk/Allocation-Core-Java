@@ -1,6 +1,6 @@
 package io.allocation.kernel.service;
 
-import io.allocation.kernel.reconcile.Reconciler;
+import io.allocation.kernel.reconcile.ShardedReconciler;
 
 import java.time.Duration;
 import java.util.Map;
@@ -45,9 +45,9 @@ public interface AllocationTemplate {
     /**
      * Result of a comparison.
      *
-     * @param report          per-coordinate outcome
-     * @param differencesPath where the difference file was written, or {@code null}
+     * @param summary         per-coordinate outcome, totals and the SHA-256 of both sides
+     * @param differencesPath where the difference file was written; the file is empty when the sides match
      */
-    record ReconcileOutcome(Reconciler.Report report, String differencesPath) {
+    record ReconcileOutcome(ShardedReconciler.Summary summary, String differencesPath) {
     }
 }

@@ -11,11 +11,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -229,21 +226,11 @@ public final class CsvInput implements AllocationInput {
             return null;
         }
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
             // Streamed, not slurped: a dataset fingerprint must not cost the size of the dataset.
-            // Reading a 200MB export into a byte[] to hash it is the kind of "temporary" allocation
-            // that decides whether a run fits in its container.
-            try (InputStream in = Files.newInputStream(path)) {
-                byte[] buffer = new byte[64 * 1024];
-                int read;
-                while ((read = in.read(buffer)) >= 0) {
-                    digest.update(buffer, 0, read);
-                }
-            }
-            String hash = HexFormat.of().formatHex(digest.digest());
+            String hash = io.allocation.kernel.io.Digests.sha256Hex(path);
             fingerprints.put(label, hash);
             return hash;
-        } catch (IOException | NoSuchAlgorithmException e) {
+        } catch (IOException e) {
             return null;
         }
     }

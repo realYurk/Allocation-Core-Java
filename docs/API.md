@@ -10,7 +10,7 @@
 | 层 | 状态 |
 |---|---|
 | 服务层（`io.allocation.kernel.service`） | ✅ 已实现：`AllocationTemplate` 的六个方法、幂等键、虚拟线程执行、有界准入 |
-| 对账（`io.allocation.kernel.reconcile`） | ✅ 已实现：坐标级比较、容差、重复策略、科目汇总、差异文件；另有分片流式版 `ShardedReconciler`（千万行、128MB 堆，见 `docs/PERF.md`） |
+| 对账（`io.allocation.kernel.reconcile`） | ✅ 已实现：坐标级比较、容差、重复策略、科目汇总、差异文件。**服务层与 CLI 都走分片流式实现** `ShardedReconciler`：结果分页读库、参考流式读文件、磁盘分片比较（千万行、128MB 堆，见 `docs/PERF.md`）；内存版 `Reconciler` 只用于小数据与测试 |
 | 数据库 schema（`ddl/`） | ✅ 已实现：MySQL 8 / PostgreSQL 15+ / SQLite，SQLite 版本由 `SchemaTest` 实际执行 |
 | 存储适配器 | ✅ JDBC（`JdbcRunRepository`，零运行时依赖，由 `JdbcRunRepositoryTest` 与 `JdbcServiceTest` 对真实库验证）；MyBatis 适配器可选，非必需 |
 | REST 控制器（§2）与 starter 装配（§6） | ⬜ 契约已冻结，按本文档实现即可；服务层是它们唯一的下游 |
@@ -157,8 +157,14 @@ public record ShareTrace(Money poolAmount, long weight, long denominator, int re
 
 ```json
 { "status":"DIFFERENCES", "matched": 999987, "amountDiffered": 8, "missing": 3, "extra": 2,
-  "differenceFile": "/var/allocation/reconcile/01J9/differences.csv" }
+  "differenceFile": "/var/allocation/reconcile/01J9/a1b2c3d4e5f6a7b8/differences.csv" }
 ```
+
+差异文件落在 `reconcile/<runId>/<参考文件 SHA-256 前 16 位>/` 下：路径由"比了什么"决定，而不是由调用次数
+决定。同一个 run 对同一份参考重复对账会得到同一份报告，而对不同参考对账会各自留下报告，不会互相覆盖。
+
+服务层的对账走的是**分片流式实现**（结果分页读库、参考文件流式读、磁盘分片比较），不是内存版：千万行
+的 run 在服务里也能对，不需要先把结果集读成一个 List。
 
 ### 2.6 `GET /allocation/runs/{runId}/explain?period=...&plant=...&sku=...`
 

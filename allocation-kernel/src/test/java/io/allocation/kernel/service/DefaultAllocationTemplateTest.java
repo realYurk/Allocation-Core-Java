@@ -278,17 +278,17 @@ class DefaultAllocationTemplateTest {
         AllocationTemplate.ReconcileOutcome outcome = template.reconcile(ReconcileCommand.builder()
                 .runId(submitted.runId()).reference(reference).build());
 
-        assertEquals("MATCH", outcome.report().status());
-        assertEquals(2, outcome.report().matched());
+        assertEquals("MATCH", outcome.summary().status());
+        assertEquals(2, outcome.summary().matched());
         assertTrue(Files.exists(Path.of(outcome.differencesPath())));
 
         Files.writeString(reference, "plant,account,amount\nP1,A1,50.00\nP1,A2,49.99\n", StandardCharsets.UTF_8);
         AllocationTemplate.ReconcileOutcome differed = template.reconcile(ReconcileCommand.builder()
                 .runId(submitted.runId()).reference(reference).tolerance("0").build());
 
-        assertEquals("DIFFERENCES", differed.report().status());
-        assertEquals(1, differed.report().differed());
-        assertEquals(1L, differed.report().differences().get(0).delta());
+        assertEquals("DIFFERENCES", differed.summary().status());
+        assertEquals(1, differed.summary().differed());
+        assertEquals("0.01", differed.summary().top().get(0).delta());
     }
 
     @Test
@@ -305,7 +305,7 @@ class DefaultAllocationTemplateTest {
                 .runId(submitted.runId()).reference(reference).tolerance("0.01")
                 .duplicatePolicy(Reconciler.DuplicatePolicy.AGGREGATE).build());
 
-        assertEquals("MATCH", outcome.report().status());
+        assertEquals("MATCH", outcome.summary().status());
     }
 
     @Test

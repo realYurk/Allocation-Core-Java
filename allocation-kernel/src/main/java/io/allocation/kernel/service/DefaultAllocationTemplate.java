@@ -10,12 +10,14 @@ import io.allocation.kernel.exec.Executor;
 import io.allocation.kernel.exec.MemorySink;
 import io.allocation.kernel.exec.Row;
 import io.allocation.kernel.exec.RunSink;
+import io.allocation.kernel.io.Digests;
 import io.allocation.kernel.money.Apportion;
 import io.allocation.kernel.money.Decimal;
 import io.allocation.kernel.plan.Plan;
 import io.allocation.kernel.plan.Planner;
-import io.allocation.kernel.reconcile.Reconciler;
-import io.allocation.kernel.reconcile.ReferenceCsv;
+import io.allocation.kernel.reconcile.AmountRows;
+import io.allocation.kernel.reconcile.CsvAmountRows;
+import io.allocation.kernel.reconcile.ShardedReconciler;
 import io.allocation.kernel.spec.AllocationRule;
 import io.allocation.kernel.spec.AllocationSpec;
 import io.allocation.kernel.spec.SpecCodec;
@@ -26,7 +28,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -254,27 +255,35 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     public ReconcileOutcome reconcile(ReconcileCommand command) {
         RunRepository.RunRecord record = requirePublished(command.runId());
         AllocationSpec spec = specOf(record);
-        ReferenceCsv.Table reference = ReferenceCsv.load(command.reference(), spec);
-
-        List<Map.Entry<String, Long>> produced = new ArrayList<>();
-        for (RunSink.ResultLine line : repository.results(command.runId(), 0, Integer.MAX_VALUE)) {
-            produced.add(new AbstractMap.SimpleImmutableEntry<>(line.coord().key(), line.amount()));
-        }
-        Map<String, Long> actual = Reconciler.index(produced, Reconciler.DuplicatePolicy.AGGREGATE);
-        Map<String, Long> expected = Reconciler.index(reference.rows(), command.duplicates());
         long tolerance = Decimal.parseScaled(command.tolerance(), spec.precision());
+        ShardedReconciler.Options options = ShardedReconciler.Options.of(spec.dimensions(), spec.precision())
+                .withTolerance(tolerance)
+                .withDuplicates(command.duplicates());
 
-        Reconciler.Report report = Reconciler.describe(Reconciler.compare(expected, actual,
-                new Reconciler.Options(tolerance, command.duplicates())), spec.dimensions());
-        Path target = workingDirectory.resolve("reconcile").resolve(command.runId()).resolve("differences.csv");
+        // A report is named by what was compared: the run plus the digest of the reference bytes. Both
+        // sides are immutable, so the same pair can only ever produce the same file — publishing it twice
+        // would overwrite evidence with a copy of itself. Naming by digest also keeps two comparisons of
+        // the same run against two different references from colliding.
+        Path target;
+        try {
+            target = workingDirectory.resolve("reconcile").resolve(command.runId())
+                    .resolve(Digests.sha256Hex(command.reference()).substring(0, 16));
+        } catch (IOException e) {
+            throw new AllocationException(ErrorCode.INTERNAL,
+                    "cannot read reference " + command.reference(), e);
+        }
         try {
             Files.createDirectories(target.getParent());
-            Files.writeString(target, Reconciler.toCsv(report, spec.precision(), spec.dimensions()),
-                    StandardCharsets.UTF_8);
+            AmountRows actual = new RepositoryAmountRows(repository, command.runId());
+            AmountRows reference = new CsvAmountRows(command.reference(), spec.dimensions(), spec.precision());
+            ShardedReconciler.Summary summary = Files.exists(target)
+                    ? ShardedReconciler.compare(actual, reference, options)
+                    : ShardedReconciler.compare(actual, reference, options, target);
+            return new ReconcileOutcome(summary, target.resolve(ShardedReconciler.DIFFERENCES_FILE).toString());
         } catch (IOException e) {
-            throw new AllocationException(ErrorCode.INTERNAL, "cannot write " + target, e);
+            throw new AllocationException(ErrorCode.INTERNAL,
+                    "cannot reconcile run " + command.runId() + " against " + command.reference(), e);
         }
-        return new ReconcileOutcome(report, target.toString());
     }
 
     @Override

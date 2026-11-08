@@ -67,7 +67,8 @@ public final class ShardedReconciler {
     /** A longer key would not survive the partition record header, and would be a data fault anyway. */
     private static final int MAX_KEY_BYTES = 65_535;
 
-    private static final String DIFFERENCES_FILE = "differences.csv";
+    /** Name of the difference file inside a published report directory. */
+    public static final String DIFFERENCES_FILE = "differences.csv";
 
     private ShardedReconciler() {
     }
