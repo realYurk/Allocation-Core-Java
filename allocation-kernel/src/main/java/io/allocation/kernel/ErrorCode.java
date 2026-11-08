@@ -38,7 +38,16 @@ public enum ErrorCode {
     FORBIDDEN("ALLOC_010"),
 
     /** The caller cancelled the run, or the run was cancelled before it finished. Not a failure. */
-    CANCELLED("ALLOC_011");
+    CANCELLED("ALLOC_011"),
+
+    /**
+     * The process that owned the run stopped before the run finished.
+     *
+     * <p>Recorded as a failure because it is one: the answer does not exist and the work has to be
+     * resubmitted. The code exists so an operator can tell "we lost the process" from "the data was
+     * wrong" without reading a message.
+     */
+    ABANDONED("ALLOC_012");
 
     private final String code;
 

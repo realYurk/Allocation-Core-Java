@@ -341,6 +341,32 @@ public final class JdbcRunRepository implements RunRepository {
         return queryOne(SELECT_RUN + " WHERE idempotency_key = ?", idempotencyKey);
     }
 
+    /**
+     * Runs in a given state, oldest first.
+     *
+     * <p>Ordered by {@code started_at} so a caller that is looking for abandoned runs walks them in the
+     * order they died, and limited so a database with a year of unfinished rows does not produce a list
+     * the caller cannot use. {@code idx_run_status} covers it.
+     */
+    @Override
+    public List<RunRecord> byStatus(Status status, int limit) {
+        String sql = SELECT_RUN + " WHERE status = ? ORDER BY started_at ASC LIMIT ?";
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, status.name());
+            statement.setInt(2, limit);
+            try (ResultSet rs = statement.executeQuery()) {
+                List<RunRecord> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(run(rs));
+                }
+                return out;
+            }
+        } catch (SQLException e) {
+            throw translate("read runs by status", e);
+        }
+    }
+
     private Optional<RunRecord> queryOne(String sql, String parameter) {
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {

@@ -11,10 +11,12 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
 import javax.sql.DataSource;
+import java.lang.management.ManagementFactory;
 
 /**
  * Wiring for the engine, and nothing else.
@@ -59,5 +61,20 @@ public class AllocationAutoConfiguration {
                                                  AllocationProperties properties) {
         return new DefaultAllocationTemplate(repository, rules, properties.getWorkingDirectory(),
                 properties.getQueueCapacity());
+    }
+
+    /**
+     * Optional startup sweep for runs left behind by a dead process.
+     *
+     * <p>The cutoff is this JVM's own start time, which is only a proof of abandonment when one process
+     * owns the database — hence the off-by-default property. When it is on, a run that was interrupted
+     * becomes {@code FAILED} with {@code ALLOC_012} during startup instead of saying {@code RUNNING} for
+     * ever.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "allocation", name = "recover-interrupted-runs", havingValue = "true")
+    public InterruptedRunSweep allocationInterruptedRunSweep(RunRepository repository) {
+        return new InterruptedRunSweep(repository, ManagementFactory.getRuntimeMXBean().getStartTime());
     }
 }

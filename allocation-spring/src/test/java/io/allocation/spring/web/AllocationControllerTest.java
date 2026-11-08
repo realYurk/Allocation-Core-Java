@@ -367,7 +367,7 @@ class AllocationControllerTest {
         for (ErrorCode code : ErrorCode.values()) {
             assertTrue(AllocationExceptionHandler.statusOf(code).isError(), code + " is not an error status");
         }
-        assertEquals(11, ErrorCode.values().length, "docs/API.md §3 must list every code");
+        assertEquals(12, ErrorCode.values().length, "docs/API.md §3 must list every code");
     }
 
     // ---------------------------------------------------------------- helpers

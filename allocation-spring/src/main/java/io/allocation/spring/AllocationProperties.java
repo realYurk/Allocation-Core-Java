@@ -50,6 +50,17 @@ public class AllocationProperties {
      */
     private int queueCapacity = 16;
 
+    /**
+     * Whether to mark runs left unfinished by a previous process as {@code FAILED} at startup.
+     *
+     * <p>Off by default, because it is only correct when one process owns the database: the sweep treats
+     * "started before this process booted" as proof that nobody is working on the run, which in a
+     * multi-instance deployment would terminate another instance's live run on paper. Turn it on for the
+     * ordinary single-instance deployment, where the alternative is a record that says {@code RUNNING}
+     * for ever.
+     */
+    private boolean recoverInterruptedRuns = false;
+
     public Path getWorkingDirectory() {
         return workingDirectory;
     }
@@ -88,5 +99,13 @@ public class AllocationProperties {
 
     public void setQueueCapacity(int queueCapacity) {
         this.queueCapacity = queueCapacity;
+    }
+
+    public boolean isRecoverInterruptedRuns() {
+        return recoverInterruptedRuns;
+    }
+
+    public void setRecoverInterruptedRuns(boolean recoverInterruptedRuns) {
+        this.recoverInterruptedRuns = recoverInterruptedRuns;
     }
 }

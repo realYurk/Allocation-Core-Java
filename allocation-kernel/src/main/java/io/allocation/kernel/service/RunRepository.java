@@ -117,6 +117,15 @@ public interface RunRepository {
 
     Optional<RunRecord> findByIdempotencyKey(String idempotencyKey);
 
+    /**
+     * Runs in a given state, oldest first, at most {@code limit}.
+     *
+     * <p>Exists for one question: which runs are still {@code RUNNING} even though nothing is executing
+     * them. A crashed process leaves exactly that, and the only way to find them is to ask the database —
+     * the process that knew is gone.
+     */
+    List<RunRecord> byStatus(Status status, int limit);
+
     /** Inserts a new run; must fail if the id or the idempotency key already exists. */
     void insert(RunRecord run);
 

@@ -96,6 +96,43 @@ class AllocationAutoConfigurationTest {
                 });
     }
 
+    @Test
+    void optionallyAbandonsRunsLeftByAPreviousProcess(@TempDir Path directory) {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        repository.insert(new io.allocation.kernel.service.RunRepository.RunRecord("01STRANDED", "rule", "sha",
+                null, "req", 2, io.allocation.kernel.service.RunRepository.Status.RUNNING, 0L, 0L, 0, 0L,
+                null, null, 1L, null));
+
+        runner.withBean(RunRepository.class, () -> repository)
+                .withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory,
+                        "allocation.recover-interrupted-runs=true")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    io.allocation.kernel.service.RunRepository.RunRecord record =
+                            repository.find("01STRANDED").orElseThrow();
+                    assertEquals(io.allocation.kernel.service.RunRepository.Status.FAILED, record.status());
+                    assertEquals("ALLOC_012", record.failureCode());
+                });
+    }
+
+    @Test
+    void leavesStrandedRunsAloneWhenTheSweepIsNotEnabled(@TempDir Path directory) {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        repository.insert(new io.allocation.kernel.service.RunRepository.RunRecord("01STRANDED", "rule", "sha",
+                null, "req", 2, io.allocation.kernel.service.RunRepository.Status.RUNNING, 0L, 0L, 0, 0L,
+                null, null, 1L, null));
+
+        runner.withBean(RunRepository.class, () -> repository)
+                .withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory)
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertEquals(io.allocation.kernel.service.RunRepository.Status.RUNNING,
+                            repository.find("01STRANDED").orElseThrow().status());
+                });
+    }
+
     /** Minimal replacement, used only to prove the conditional backs off. */
     private static final class DelegatingNoop implements AllocationTemplate {
         @Override

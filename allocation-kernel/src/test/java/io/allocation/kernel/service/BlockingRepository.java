@@ -113,6 +113,11 @@ final class BlockingRepository implements RunRepository {
     }
 
     @Override
+    public List<RunRecord> byStatus(Status status, int limit) {
+        return delegate.byStatus(status, limit);
+    }
+
+    @Override
     public void insert(RunRecord run) {
         delegate.insert(run);
     }

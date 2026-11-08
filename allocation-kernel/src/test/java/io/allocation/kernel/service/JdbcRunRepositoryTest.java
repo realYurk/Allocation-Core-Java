@@ -296,6 +296,35 @@ class JdbcRunRepositoryTest {
                 1_700_000_000_000L, 1_700_000_001_000L);
     }
 
+    /**
+     * {@code byStatus} is what recovery uses to find rows nobody is working on, so the ordering and the
+     * limit are part of the contract, not incidental: oldest first means a backlog is worked through in
+     * the order it piled up, and a limit means one call cannot try to load a year of them.
+     */
+    @Test
+    void listsRunsInAGivenStateOldestFirstAndHonoursTheLimit() {
+        repository.insert(state("01OLD", RunRepository.Status.RUNNING, 1_000L));
+        repository.insert(state("01NEWER", RunRepository.Status.RUNNING, 2_000L));
+        repository.insert(state("01FINISHED", RunRepository.Status.PUBLISHED, 500L));
+        repository.insert(state("01QUEUED", RunRepository.Status.PENDING, 1_500L));
+
+        assertEquals(List.of("01OLD", "01NEWER"),
+                repository.byStatus(RunRepository.Status.RUNNING, 10).stream()
+                        .map(RunRepository.RunRecord::runId).toList());
+        assertEquals(List.of("01OLD"),
+                repository.byStatus(RunRepository.Status.RUNNING, 1).stream()
+                        .map(RunRepository.RunRecord::runId).toList());
+        assertEquals(List.of("01QUEUED"),
+                repository.byStatus(RunRepository.Status.PENDING, 10).stream()
+                        .map(RunRepository.RunRecord::runId).toList());
+        assertEquals(List.of(), repository.byStatus(RunRepository.Status.FAILED, 10));
+    }
+
+    private static RunRepository.RunRecord state(String runId, RunRepository.Status status, long startedAt) {
+        return new RunRepository.RunRecord(runId, "rule-α", "sha-rule", null, "sha-request", 2,
+                status, 0L, 0L, 0, 0L, null, null, startedAt, null);
+    }
+
     private void execute(String sql) throws SQLException {
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {

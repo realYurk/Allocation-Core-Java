@@ -204,6 +204,7 @@ public record ShareTrace(Money poolAmount, long weight, long denominator, int re
 | `ALLOC_009` | 500 | 内部错误 | 未分类异常（必须带 traceId） |
 | `ALLOC_010` | 403 | 无权限 | `AllocationAuthorizer` 拒绝 |
 | `ALLOC_011` | 409 | 已取消 | 调用方取消；不是故障，run 状态为 `CANCELLED` |
+| `ALLOC_012` | 409 | 进程中断 | 持有该 run 的进程在完成前退出；`RunRecovery.abandonInterrupted` 把 `RUNNING`/`PENDING` 记录钉成 `FAILED` + 本码。**不会作为 HTTP 错误返回**——它是 run 记录上的失败原因，调用方从 §2.3 的 `status` 看到 `FAILED` |
 
 **规则**：错误响应必须含 `stageId` / `allocationId` / `poolKey`（若适用），否则视为实现不完整。
 
@@ -248,31 +249,25 @@ DDL 是代码，只保留一份，放在 `ddl/`：
 
 ## 5. 配置项
 
+**已实现（`AllocationProperties`，前缀 `allocation`，全部有默认值）**：
+
 ```yaml
 allocation:
-  enabled: true
-  engine-version: 1.0.0
-  job:
-    workers: 4                  # 池级并行度
-    queue-capacity: 16
-    timeout: 30m
-    cancel-poll-interval: 500ms
-  storage:
-    retain-lines: true
-    retain-pools: true
-    archive-threshold: 5000000  # 超过则只存归档文件
-    archive-dir: /data/allocation/archive
-  integrity:
-    fail-on-missing-target: false   # 声明目标缺权重时是否阻断
-    warn-on-duplicate-driver: true
-    verify-input-sha256: true
-  limits:
-    preview-max-rows: 100000
-    max-dimensions: 30
-    max-precision: 6
+  working-directory: allocation-data   # run 的证据目录（staging + 原子改名发布）
+  rules-directory: allocation-rules    # <ruleCode>.json 所在目录
+  workers: 1                           # 默认池级并行度；单次运行可覆盖
+  max-rows-in-memory: 250000           # 阶段缓冲区溢写阈值，决定峰值堆
+  queue-capacity: 16                   # 准入上限，满了返回 ALLOC_007
+  recover-interrupted-runs: false      # 启动时把上个进程遗留的 RUNNING/PENDING 钉成 FAILED(ALLOC_012)
 ```
 
-全部有默认值，**不配置也能启动**。
+`recover-interrupted-runs` 默认关闭：只有"一个进程独占数据库"时，"早于本次启动"才等于"没人管了"。
+单实例部署（绝大多数若依场景）可以打开；多实例部署打开它，会把另一个实例正在跑的 run 在纸面上判死。
+
+**未实现（写在这里只是说明曾经的计划，配了也不会生效）**：`job.timeout`、`job.cancel-poll-interval`、
+`storage.*`、`integrity.*`、`limits.*`。对应的能力目前在别处：并行度是 `workers`，明细保留是每次提交的
+`options.retainLines`，preview 行数上限是 `PreviewCommand.MAX_ROWS`（常量，不配置），精度上限由规则 schema
+本身约束（0..6）。
 
 ---
 

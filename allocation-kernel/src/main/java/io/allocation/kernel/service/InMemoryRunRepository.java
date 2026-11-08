@@ -82,6 +82,15 @@ public final class InMemoryRunRepository implements RunRepository {
     }
 
     @Override
+    public List<RunRecord> byStatus(Status status, int limit) {
+        return runs.values().stream()
+                .filter(run -> run.status() == status)
+                .sorted(java.util.Comparator.comparingLong(RunRecord::startedAtEpochMs))
+                .limit(limit)
+                .toList();
+    }
+
+    @Override
     public synchronized void insert(RunRecord run) {
         if (runs.containsKey(run.runId())) {
             throw new AllocationException(ErrorCode.IDEMPOTENCY_CONFLICT, "run " + run.runId() + " already exists");
