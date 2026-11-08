@@ -162,12 +162,57 @@ java -Xmx64m -XX:+UseSerialGC -cp "$CP:.bench/bench-classes" EvidenceBench 10000
 
 ---
 
-## 7. 明确没有测过的
+## 7. 内核微基准（JMH）：一次分摊的吞吐
+
+前六节的数字都是端到端的 wall clock，含启动、含 IO、无预热。它们回答"这个负载要多久"，不回答"这段代码快不快"。
+分摊的热路径只有一个函数——一次池的 `Apportion`——所以单独测它，才能看出改动是让引擎变快还是只是让 JVM 变慢。
+
+```bash
+mvn -q -pl allocation-bench -am package
+java -jar allocation-bench/target/allocation-bench-1.0.0-SNAPSHOT.jar \
+     -f 1 -wi 3 -i 5 -rf json -rff allocation-bench/jmh-baseline.json
+```
+
+| 基准 | 目标数 | ops/ms | 折算 |
+|---|---|---|---|
+| `split`（每次新建缓冲） | 8 | 12,704.5 | 78 ns / 次 |
+| `split` | 64 | 586.7 | 1.7 µs / 次 |
+| `split` | 512 | 41.0 | 24.4 µs / 次 |
+| `splitReusingBuffer`（复用工作区） | 8 | 12,938.9 | 77 ns / 次 |
+| `splitReusingBuffer` | 64 | 577.1 | 1.7 µs / 次 |
+| `splitReusingBuffer` | 512 | 42.3 | 23.6 µs / 次 |
+| `settlementOrder`（余数结算排序） | 8 | 2,721.1 | 368 ns / 次 |
+| `settlementOrder` | 64 | 235.7 | 4.2 µs / 次 |
+| `settlementOrder` | 512 | 19.8 | 50.5 µs / 次 |
+
+机器：i5-12490F / 16GB / Windows 11 / Oracle JDK 21.0.9，`-f 1 -wi 3 -i 5`（每个参数各自 fork，单线程）。
+
+**读出来的两件事**：
+
+1. **复用缓冲几乎没有收益**（8 目标 12,704 vs 12,939，差异在噪声内；512 目标 41.0 vs 42.3）。TLAB 上的小对象
+   分配便宜到测不出来。所以引擎里**没有**"每个 worker 一个工作区"这种东西——计划里写过（P8 第 3 条），
+   实测证明它换不来可测的速度，只会换来一个线程安全的负担。这条数字就是不做它的理由。
+2. **余数结算比分摊本身慢 4–5 倍**，因为它是排序（`settlementOrder` 每次池排一遍所有目标）。这也是为什么
+   它在引擎里只在池边界调一次，而不是每行调一次。任何"每行都结算一次"的改动都会把整体拖慢一个数量级。
+
+**回归门禁**（不在 `mvn verify` 里，见下）：
+
+```bash
+python tools/jmh_regression.py allocation-bench/jmh-baseline.json <新跑的 json>
+```
+
+任何基准比基线慢 20% 以上则退出码 1。阈值刻意宽：这台机器上的噪声是百分之几，而真正的退化历来是结构性的
+（多一次遍历、循环里多一次分配），表现为几十个百分点。卡到 5% 的门禁会在第一次噪声上误报，然后所有人加
+`-DskipTests`——那是门禁的死法。
+
+---
+
+## 8. 明确没有测过的
 
 - **千万行驱动表**。列式表示已经把它压到约 28 字节/行，但理论上限仍是"整张表常驻"。一百万个目标坐标
   （第 1 节）在 64MB 里能跑；一千万个目标坐标没有测过，也不认为能跑。
 - MySQL / PostgreSQL 的写入吞吐（`JdbcRunRepository` 只验证了正确性，没有压测）。
-- Spring 容器与 HTTP 层的开销（starter 尚未实现）。
+- Spring 容器与 HTTP 层的开销（starter 已实现并有真实端口上的功能测试，但**没有吞吐数字**）。
 - 多进程并发提交下的吞吐（有界准入的行为有测试，吞吐没有）。
 - 溢写到磁盘时的 I/O 上限（本地 NVMe；网络盘会慢得多）。
-- 检查点与断点续算（P9 的另一半），完全未做。
+- 检查点与断点续算（P9 的另一半），完全未做。中断的 run 目前只能被清理成 `FAILED`（`ALLOC_012`），不能续算。

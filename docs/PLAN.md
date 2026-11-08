@@ -41,8 +41,9 @@ allocation-java/
 │       ├── service/      AllocationTemplate, DefaultAllocationTemplate, RunCommand, Money,
 │       │                 RunRepository（+ InMemory / Jdbc 两实现）, RunResult, Explain
 │       └── ddl/          mysql8 / postgres / sqlite（resource，由 SchemaTest 实际执行）
-├── allocation-conformance/          测试专用：golden 语料runner + 属性测试（129 个用例）
-└── allocation-spring/               Spring Boot 3.2 starter + REST（依赖方向只指向 kernel）
+├── allocation-conformance/          测试专用：golden 语料 runner + 属性测试（129 个用例）
+├── allocation-spring/               Spring Boot 3.2 starter + REST（依赖方向只指向 kernel）
+└── allocation-bench/                JMH 基线（只依赖 kernel；不进运行时，不进宿主 classpath）
     ├── AllocationProperties / AllocationAutoConfiguration / AllocationWebConfiguration
     └── web/              AllocationController, ApiResponse, Api, ApiMapper, AllocationExceptionHandler
 ```
@@ -260,7 +261,13 @@ MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation
 > **状态**：动词/字典/格式化/规模目标已完成。实测：宽表 100 万行结果 2.32s（4 workers，Go 3.88s），
 > 堆下限从 256MB 降到 **64MB**；深表 1000 万行输入在 **64MB 堆**下 14.5s，在 **48MB 堆**下 13.2s
 > （`--max-rows 50000`）；对账 1000 万行 × 2 侧 128MB/22.8s。见 `docs/PERF.md`。
-> **未解**：驱动表仍整体常驻（列式之后约 28 字节/行，千万个目标坐标未测）；JMH 基线尚未建立。
+>
+> **JMH 基线已建立**（`allocation-bench`，JMH 1.37）：`Apportion.split` 8/64/512 目标分别为
+> 12,704 / 587 / 41 ops/ms，`settlementOrder` 2,721 / 236 / 19.8 ops/ms；基线 JSON 入库，
+> `tools/jmh_regression.py` 按 -20% 判退化。微基准还顺带否掉了细分任务第 3 条：复用缓冲测不出收益（TLAB 太便宜），
+> 所以引擎里没有线程本地工作区；余数结算比分摊本身慢 4–5 倍（它是排序），因此每池只调一次。
+> **未解**：驱动表仍整体常驻（列式之后约 28 字节/行，千万个目标坐标未测）；回归门禁不在 `mvn verify` 里
+> （机器噪声会把它变成误报机器），需要一条独立的 CI job 才有意义。
 
 ---
 
