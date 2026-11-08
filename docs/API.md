@@ -10,7 +10,7 @@
 | 层 | 状态 |
 |---|---|
 | 服务层（`io.allocation.kernel.service`） | ✅ 已实现：`AllocationTemplate` 的六个方法、幂等键、虚拟线程执行、有界准入 |
-| 对账（`io.allocation.kernel.reconcile`） | ✅ 已实现：坐标级比较、容差、重复策略、科目汇总、差异文件 |
+| 对账（`io.allocation.kernel.reconcile`） | ✅ 已实现：坐标级比较、容差、重复策略、科目汇总、差异文件；另有分片流式版 `ShardedReconciler`（千万行、128MB 堆，见 `docs/PERF.md`） |
 | 数据库 schema（`ddl/`） | ✅ 已实现：MySQL 8 / PostgreSQL 15+ / SQLite，SQLite 版本由 `SchemaTest` 实际执行 |
 | 存储适配器 | ✅ JDBC（`JdbcRunRepository`，零运行时依赖，由 `JdbcRunRepositoryTest` 与 `JdbcServiceTest` 对真实库验证）；MyBatis 适配器可选，非必需 |
 | REST 控制器（§2）与 starter 装配（§6） | ⬜ 契约已冻结，按本文档实现即可；服务层是它们唯一的下游 |

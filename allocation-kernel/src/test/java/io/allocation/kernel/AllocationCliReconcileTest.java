@@ -206,6 +206,60 @@ class AllocationCliReconcileTest {
     }
 
     @Test
+    void streamingReconcilePublishesAReportDirectoryAndAgreesWithItsOwnOutput() throws IOException {
+        Path report = directory.resolve("streamed");
+        Path reference = reference("account,plant,value\nA1,P1,50.00\nA2,P1,50.00\n");
+
+        Invocation result = reconcile("reconcile",
+                "--actual", outputDir.resolve("results.csv").toString(),
+                "--reference", reference.toString(),
+                "--precision", "2",
+                "--streaming",
+                "--out", report.toString());
+
+        assertEquals(0, result.status(), result.err());
+        assertTrue(result.out().contains("status=MATCH"), result.out());
+        assertTrue(result.out().contains("matched=2"), result.out());
+        assertEquals("kind,account,coordinate,reference_amount,actual_amount,difference\n",
+                Files.readString(report.resolve("differences.csv"), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void streamingReconcileNamesTheDifferenceAndExitsThree() throws IOException {
+        Path report = directory.resolve("streamed-diff");
+        Path reference = reference("account,plant,value\nA1,P1,49.99\nA2,P1,50.00\n");
+
+        Invocation result = reconcile("reconcile",
+                "--actual", outputDir.resolve("results.csv").toString(),
+                "--reference", reference.toString(),
+                "--precision", "2",
+                "--streaming",
+                "--out", report.toString());
+
+        assertEquals(AllocationCli.EXIT_DIFFERENCES, result.status(), result.err());
+        assertTrue(result.out().contains("status=DIFFERENCES"), result.out());
+        assertTrue(result.out().contains("DIFFERENT"), result.out());
+        assertTrue(Files.readString(report.resolve("differences.csv"), StandardCharsets.UTF_8)
+                .contains("DIFFERENT,A1,account=A1 | plant=P1,49.99,50.00,0.01"));
+    }
+
+    @Test
+    void streamingReconcileRefusesFilesWithDifferentDimensions() throws IOException {
+        Path report = directory.resolve("streamed-bad");
+        Path reference = reference("account,region,value\nA1,R1,50.00\n");
+
+        Invocation result = reconcile("reconcile",
+                "--actual", outputDir.resolve("results.csv").toString(),
+                "--reference", reference.toString(),
+                "--precision", "2",
+                "--streaming",
+                "--out", report.toString());
+
+        assertEquals(1, result.status());
+        assertTrue(result.err().contains("ALLOC_001"), result.err());
+    }
+
+    @Test
     void missingArgumentsFailWithUsage() {
         Invocation result = reconcile("reconcile", "--actual", "a.csv");
 

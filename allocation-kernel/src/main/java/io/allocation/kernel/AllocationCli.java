@@ -1,12 +1,15 @@
 package io.allocation.kernel;
 
 
+import io.allocation.kernel.coord.Utf8Order;
 import io.allocation.kernel.exec.AllocationRunner;
 import io.allocation.kernel.exec.Executor;
 import io.allocation.kernel.exec.RunSummary;
 import io.allocation.kernel.money.Decimal;
 import io.allocation.kernel.plan.Plan;
+import io.allocation.kernel.io.StreamingCsvReader;
 import io.allocation.kernel.plan.Planner;
+import io.allocation.kernel.reconcile.ShardedReconciler;
 import io.allocation.kernel.reconcile.Reconciler;
 import io.allocation.kernel.reconcile.ReferenceCsv;
 import io.allocation.kernel.spec.AllocationSpec;
@@ -157,6 +160,8 @@ public final class AllocationCli {
         boolean rejectAll = false;
         boolean rejectActual = false;
         boolean rejectReference = false;
+        boolean streaming = false;
+        int shards = ShardedReconciler.DEFAULT_SHARDS;
 
         for (int i = 1; i < args.length; i++) {
             String flag = args[i];
@@ -169,14 +174,24 @@ public final class AllocationCli {
                 case "--reject-duplicates" -> rejectAll = true;
                 case "--reject-actual-duplicates" -> rejectActual = true;
                 case "--reject-reference-duplicates" -> rejectReference = true;
+                case "--streaming" -> streaming = true;
+                case "--shards" -> {
+                    shards = Integer.parseInt(value(args, ++i, flag));
+                    streaming = true;
+                }
                 default -> throw new UsageException("unknown option: " + flag);
             }
         }
         if (actualPath == null || referencePath == null) {
             err.println("usage: reconcile --actual <results.csv> --reference <reference.csv>"
-                    + " [--precision 0..6] [--tolerance 0] [--out differences.csv]"
-                    + " [--reject-duplicates] [--reject-actual-duplicates] [--reject-reference-duplicates]");
+                    + " [--precision 0..6] [--tolerance 0] [--out differences.csv|reportDir]"
+                    + " [--reject-duplicates] [--reject-actual-duplicates] [--reject-reference-duplicates]"
+                    + " [--streaming [--shards 32]]");
             return 2;
+        }
+        if (streaming) {
+            return reconcileStreaming(actualPath, referencePath, differencesPath, precision, toleranceText,
+                    rejectAll, rejectActual, rejectReference, shards, out);
         }
 
         ReferenceCsv.Table actual = ReferenceCsv.load(Path.of(actualPath), precision);
@@ -232,6 +247,114 @@ public final class AllocationCli {
             }
         }
         return report.matchedExactly() ? 0 : EXIT_DIFFERENCES;
+    }
+
+    /**
+     * The same comparison, without holding either side in memory.
+     *
+     * <p>{@code --out} names a directory here rather than a file, because the streaming comparator
+     * publishes a report directory atomically instead of rewriting a file in place.
+     */
+    private static int reconcileStreaming(String actualPath, String referencePath, String outPath,
+                                          int precision, String toleranceText, boolean rejectAll,
+                                          boolean rejectActual, boolean rejectReference, int shards,
+                                          PrintStream out) {
+        Path actual = Path.of(actualPath);
+        Path reference = Path.of(referencePath);
+        List<String> dimensions = streamingDimensions(actual, reference);
+
+        long tolerance = Decimal.parseScaled(toleranceText, precision);
+        Reconciler.DuplicatePolicy duplicates = rejectAll || (rejectActual && rejectReference)
+                ? Reconciler.DuplicatePolicy.REJECT
+                : rejectActual ? Reconciler.DuplicatePolicy.REJECT_ACTUAL
+                : rejectReference ? Reconciler.DuplicatePolicy.REJECT_REFERENCE
+                : Reconciler.DuplicatePolicy.AGGREGATE;
+
+        Path reportDirectory = outPath != null
+                ? Path.of(outPath)
+                : actual.resolveSibling(actual.getFileName() + ".reconcile");
+        ShardedReconciler.Summary summary;
+        try {
+            summary = ShardedReconciler.compare(actual, reference,
+                    new ShardedReconciler.Options(shards, tolerance, duplicates, 20, precision, dimensions),
+                    reportDirectory);
+        } catch (IOException e) {
+            throw new AllocationException(ErrorCode.INTERNAL, "cannot reconcile " + actualPath, e);
+        }
+
+        out.println("status=" + summary.status()
+                + " matched=" + summary.matched()
+                + " different=" + summary.differed()
+                + " missing=" + summary.missing()
+                + " extra=" + summary.extra());
+        out.println("actual_rows=" + summary.actualRows()
+                + " duplicate_rows=" + summary.actualDuplicateRows()
+                + " total=" + summary.actualTotal());
+        out.println("reference_rows=" + summary.referenceRows()
+                + " duplicate_rows=" + summary.referenceDuplicateRows()
+                + " total=" + summary.referenceTotal());
+        out.println("actual_sha256=" + summary.actualSha256());
+        out.println("reference_sha256=" + summary.referenceSha256());
+        out.println("shards=" + summary.shards() + " report=" + summary.differences());
+        for (ShardedReconciler.Account account : summary.accounts()) {
+            out.println("  account " + account.account() + ": different=" + account.differed()
+                    + " missing=" + account.missing() + " extra=" + account.extra());
+        }
+        for (ShardedReconciler.Difference difference : summary.top()) {
+            out.println("  " + difference.kind() + " " + difference.coordinate()
+                    + " reference=" + difference.referenceAmount()
+                    + " actual=" + difference.actualAmount()
+                    + " delta=" + difference.delta());
+        }
+        return summary.matchedExactly() ? 0 : EXIT_DIFFERENCES;
+    }
+
+    /**
+     * Reads both headers and returns the shared coordinate dimensions, sorted.
+     *
+     * <p>Only the header is read: the streaming path exists so that the files are never loaded, and
+     * reading a whole file to discover its columns would give that away at the first line.
+     */
+    private static List<String> streamingDimensions(Path actual, Path reference) {
+        List<String> left = headerDimensions(actual);
+        List<String> right = headerDimensions(reference);
+        if (!left.equals(right)) {
+            throw new AllocationException(ErrorCode.RULE_INVALID,
+                    "the two files declare different coordinate dimensions: " + left + " vs " + right);
+        }
+        return left;
+    }
+
+    private static List<String> headerDimensions(Path file) {
+        try (StreamingCsvReader reader = new StreamingCsvReader(Files.newInputStream(file))) {
+            List<String> header = reader.read();
+            if (header == null) {
+                throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE, file + ": empty file");
+            }
+            List<String> dimensions = new java.util.ArrayList<>();
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (int i = 0; i < header.size(); i++) {
+                String name = i == 0 && header.get(i).startsWith("\ufeff")
+                        ? header.get(i).substring(1) : header.get(i);
+                if (name.isEmpty()) {
+                    throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
+                            file + " has an empty column name at position " + (i + 1));
+                }
+                if (!seen.add(name)) {
+                    throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
+                            file + " has a duplicate column " + name);
+                }
+                if (name.equals("amount") || name.equals("value")
+                        || name.equals("terminal_stage") || name.equals("row_id")) {
+                    continue;
+                }
+                dimensions.add(name);
+            }
+            dimensions.sort(Utf8Order::compare);
+            return dimensions;
+        } catch (IOException e) {
+            throw new AllocationException(ErrorCode.INTERNAL, "cannot read " + file, e);
+        }
     }
 
     private static String value(String[] args, int index, String flag) {

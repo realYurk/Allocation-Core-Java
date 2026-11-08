@@ -176,7 +176,10 @@ allocation-java/
 
 ### P6 对账（`reconcile`）
 
-> **状态**：坐标级核对、容差、重复策略、科目汇总、`reconcile` 命令与 `POST` 服务方法已完成；分片流式实现（对应 Go `acceptance.Compare`，用于千万行）待做。
+> **状态**：坐标级核对、容差、重复策略、科目汇总、`reconcile` 命令与 `POST` 服务方法已完成；
+> **分片流式实现 `ShardedReconciler` 已完成**（对应 Go `acceptance.Compare`：两趟磁盘分片 + `BigInteger`
+> 汇总 + 原子发布 + k 路归并保证分片数不影响报告顺序）。实测 **10M 行 × 2 侧、128MB 堆、22.8s、1000 处差异全部命中**，
+> 见 `docs/PERF.md`。CLI 用 `--streaming`，服务层接线待 M4。
 
 | 项 | 内容 |
 |---|---|
