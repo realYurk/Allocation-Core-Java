@@ -42,8 +42,10 @@ Full ruleset: [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md).
 
 | Module | Purpose | Dependencies |
 |---|---|---|
-| `allocation-kernel` | parser, planner, executor, evidence, reconciliation | **JDK only** |
+| `allocation-kernel` | parser, planner, executor, evidence, reconciliation, service layer, CLI | **JDK only** |
 | `allocation-conformance` | golden corpus + differential harness (the acceptance gate) | kernel, JUnit |
+| `allocation-spring` | Spring Boot 3.2 starter + REST binding (`/allocation/**`) | kernel, spring-boot-web |
+| `allocation-bench` | JMH baselines for the hot path; never on a host's classpath | kernel, JMH |
 
 ## Requirements
 
@@ -56,16 +58,32 @@ Full ruleset: [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md).
 mvn verify
 ```
 
+That is the whole gate: 228 kernel tests, 129 golden-corpus tests, and 31 starter tests including one
+that boots a real application on a random port and calls the REST contract over HTTP. Update a number in
+`docs/` only after this passes.
+
+```bash
+mvn -q -pl allocation-bench -am package   # benchmarks
+java -jar allocation-bench/target/allocation-bench-*.jar -f 1 -wi 3 -i 5
+```
+
 ## Status
 
-Under construction, milestone by milestone. See [`docs/PLAN.md`](docs/PLAN.md).
+| Area | State |
+|---|---|
+| Money, largest-remainder settlement, tie-break by identity | done — byte-identical to the frozen Go corpus |
+| Rule model, planner, multi-stage executor (MERGE, filters, hierarchies) | done |
+| Evidence, idempotent runs, JDBC persistence (MySQL 8 / PostgreSQL 15 / SQLite) | done |
+| Reconciliation (in-memory and sharded-on-disk) | done — 10M × 2 rows in 128MB |
+| Scale: 10M amount rows in a 64MB heap | done (`docs/PERF.md`) |
+| Service layer: preview / submit / status / result / explain / reconcile / cancel | done, with live progress |
+| Spring starter + REST contract (`docs/API.md` §2) | done, verified over a real socket |
+| JMH baseline + regression comparison | done (`docs/PERF.md` §7) |
+| Checkpoint / resume after interruption | **not done** — an interrupted run is marked `FAILED` (`ALLOC_012`), never resumed |
+| Ten-million *target* driver tables | **not done** — the table is resident, ~28 bytes per row |
 
-| Milestone | Scope | State |
-|---|---|---|
-| M1 | money domain, exact split, golden corpus | in progress |
-| M2 | rule model, planner, single-stage executor | planned |
-| M3 | evidence, reconciliation, Spring starter | planned |
-| M4 | streaming / checkpointed execution | planned |
+Milestone-by-milestone history and the reasoning behind each decision: [`docs/PLAN.md`](docs/PLAN.md),
+[`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Licence
 

@@ -1,0 +1,79 @@
+name: verify
+
+# The gate that runs the whole thing: kernel, golden corpus, starter, real-port HTTP test.
+# Every claim in docs/ is checked here or it is not checked at all.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # No -o here on purpose: a cached ~/.m2 is not a promise, and a cold runner must still be able to
+      # build. Offline mode is for the developer machine, where the network is the thing being avoided.
+      - name: verify
+        run: mvn -B -ntp verify
+
+      - name: keep the test reports when something fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/*.txt'
+          if-no-files-found: ignore
+
+  # Benchmarks are not part of the gate, and deliberately cannot fail it: the checked-in baseline was
+  # measured on a specific machine, and a GitHub runner has a different CPU, a different memory
+  # subsystem and a different JVM vendor build. Comparing across machines produces a number that looks
+  # authoritative and means nothing.
+  #
+  # What this job is for: showing that the benchmark builds and runs on a clean machine, and producing
+  # the JSON somebody can compare against a baseline taken on the *same* runner. The regression decision
+  # is `python tools/jmh_regression.py baseline.json new.json`, run locally or on a fixed self-hosted
+  # runner. See docs/PERF.md §7.
+  bench:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: build
+        run: mvn -B -ntp -pl allocation-bench -am package -DskipTests
+
+      - name: run
+        run: |
+          java -jar allocation-bench/target/allocation-bench-*.jar \
+            -f 1 -wi 3 -i 5 -rf json -rff jmh-$(date +%Y%m%d).json
+
+      - name: compare with the checked-in baseline (informational)
+        run: |
+          latest=$(ls -t jmh-*.json | head -1)
+          python3 tools/jmh_regression.py allocation-bench/jmh-baseline.json "$latest" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jmh-results
+          path: jmh-*.json
