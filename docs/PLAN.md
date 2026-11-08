@@ -210,7 +210,8 @@ MyBatis 适配器属于宿主自由（`RunRepository` 是接口）。`allocation
 > 已完成：`AllocationProperties`（5 个配置项，全部有默认值）、`@AutoConfiguration` 装配（引擎与 Web 分层，
 > 全部 `@ConditionalOnMissingBean`）、七个端点（preview / runs / status / result / explain / reconcile / cancel）、
 > 错误码 → HTTP 一张表（`AllocationExceptionHandler`，`stageId`/`allocationId`/`poolKey` 随响应返回）、
-> 协作式取消（`cancel(runId)`，池批次边界生效，`CANCELLED` 为独立终态）。
+> 协作式取消（`cancel(runId)`，池批次边界生效，`CANCELLED` 为独立终态）、
+> **运行中实时进度**（`Executor.Progress` 回调 + `status()` 双来源，见 D-021）。
 > **未做（有意）**：`@EnableAllocation`（自动配置已足够，多一个注解只会多一种启用方式）、OpenAPI 文档生成
 > （契约文档是 `docs/API.md`，机器可读版本等契约稳定后一次性生成）、`AllocationAuthorizer` / `TenantProvider` SPI
 > （宿主接若依 `@PreAuthorize` 时才有意义，先留接口形状）、Micrometer 指标、`examples/ruoyi-smoke.sh`。

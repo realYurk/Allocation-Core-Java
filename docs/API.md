@@ -9,7 +9,7 @@
 
 | 层 | 状态 |
 |---|---|
-| 服务层（`io.allocation.kernel.service`） | ✅ 已实现：`AllocationTemplate` 的六个方法、幂等键、虚拟线程执行、有界准入 |
+| 服务层（`io.allocation.kernel.service`） | ✅ 已实现：`AllocationTemplate` 的七个方法（含 `cancel`）、幂等键、虚拟线程执行、有界准入、**运行中实时进度**（`status()` 在 run 执行期间返回 `pools/totalPools/rows`，不是只在结束时给数） |
 | 对账（`io.allocation.kernel.reconcile`） | ✅ 已实现：坐标级比较、容差、重复策略、科目汇总、差异文件。**服务层与 CLI 都走分片流式实现** `ShardedReconciler`：结果分页读库、参考流式读文件、磁盘分片比较（千万行、128MB 堆，见 `docs/PERF.md`）；内存版 `Reconciler` 只用于小数据与测试 |
 | 数据库 schema（`ddl/`） | ✅ 已实现：MySQL 8 / PostgreSQL 15+ / SQLite，SQLite 版本由 `SchemaTest` 实际执行 |
 | 存储适配器 | ✅ JDBC（`JdbcRunRepository`，零运行时依赖，由 `JdbcRunRepositoryTest` 与 `JdbcServiceTest` 对真实库验证）；MyBatis 适配器可选，非必需 |
@@ -141,6 +141,10 @@ public record ShareTrace(Money poolAmount, long weight, long denominator, int re
 ```
 
 `status ∈ PENDING | RUNNING | PUBLISHED | FAILED | CANCELLED`
+
+`progress` 在 run 执行期间是**实时**的：`totalPools` 在分摊开始前就已确定，`pools` 每完成一个池（更准确说：
+每一批并发池）推进一次，都在执行器自己的循环里取数，不是估算。run 到终态后这些数字来自它已提交的证据
+（`pools` = 池级对账行数，`rows` = 结果行数），因此重启后仍然可读——实时进度本身不做持久化，它是"此刻为真"的数字。
 
 ### 2.4 `GET /allocation/runs/{runId}/result?page=1&size=500`
 
@@ -274,17 +278,19 @@ allocation:
 
 ## 6. 扩展点（SPI）
 
-| 接口 | 默认实现 | 宿主可替换 |
-|---|---|---|
-| `AmountSource` | CSV / JDBC | 数据从哪来 |
-| `DriverSource` | CSV / JDBC | 权重从哪来 |
-| `RunRepository` | MyBatis | 存储实现 |
-| `AllocationAuthorizer` | 全部放行 | 接若依 `@PreAuthorize` |
-| `TenantProvider` | 固定 `000000` | 接若依租户/数据源 |
-| `DataScopeProvider` | 不限制 | 接若依 `@DataScope` |
-| `AllocationListener` | 无操作 | 运行事件（开始/池完成/发布/失败） |
+| 接口 | 默认实现 | 现状 | 宿主可替换 |
+|---|---|---|---|
+| `AmountSource` | 规则目录下的 CSV / 调用方内存行 | ✅ 已实现 | 数据从哪来 |
+| `RunRepository` | 有 `DataSource` 走 JDBC，否则内存 | ✅ 已实现 | 存储实现（MyBatis Mapper 亦可） |
+| `RuleResolver` | `DirectoryRuleResolver`（`allocation.rules-directory`） | ✅ 已实现 | 规则从库/配置中心来 |
+| `AllocationInput` | `CsvInput` | ✅ 已实现 | 覆盖流式的 `forEachAmount` / `forEachDriver` |
+| `Executor.Progress` | 无操作 | ✅ 已实现 | 运行期进度（池数/行数）的外部上报 |
+| `AllocationListener` | 无操作 | ⬜ 计划中 | 运行事件（开始/池完成/发布/失败） |
+| `AllocationAuthorizer` | 全部放行 | ⬜ 计划中 | 接若依 `@PreAuthorize` |
+| `TenantProvider` / `DataScopeProvider` | 固定值 / 不限制 | ⬜ 计划中 | 接若依租户与 `@DataScope` |
 
-SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应触碰内核代码。
+SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应触碰内核代码。标 ⬜ 的三项在实现前不发布接口，
+因为一个没有默认行为、也没有调用点的接口，只会让宿主提前依赖一个还会变的名字。
 
 > **内核级输入契约（已实现）**：`AllocationInput` 除了返回列表的 `readAmounts` / `readDrivers`，还提供
 > `forEachAmount(dataset, consumer)` 与 `forEachDriver(dataset, weightField, consumer)`。执行器只走流式
@@ -299,11 +305,13 @@ SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应
 ## 7. 接入若依的 30 分钟清单
 
 1. `mvn install` 组件（或用企业私服坐标）
-2. 在业务模块 `pom.xml` 加入 `allocation-spring-boot-starter`
+2. 在业务模块 `pom.xml` 加入 `allocation-spring`（自带 `spring-boot-starter-web` 传递依赖；只要引擎不要
+   REST，就只引 `allocation-kernel`）
 3. 执行 `ddl/allocation-mysql8.sql`（4 张表）
 4. `application.yml` 加 `allocation:` 段（可全部省略）
-5. 准备规则 JSON，插入 `allocation_rule`（或用 `POST /allocation/rules`，见下）
-6. 实现（可选）`AllocationAuthorizer` → 关联若依权限
+5. 准备规则 JSON：放进 `allocation.rules-directory`，文件名即规则码（`<ruleCode>.json`）；
+   从库里读规则则声明一个 `RuleResolver` Bean
+6. 实现（可选）`AllocationAuthorizer` → 关联若依权限（⬜ 接口尚未发布，见 §6）
 7. 用若依代码生成器，对 `allocation_run` / `allocation_pool` 生成管理页面
 8. 调用 `POST /allocation/preview` 验证一个池
 9. 调用 `POST /allocation/runs` 跑全量，轮询 `GET /allocation/runs/{id}`

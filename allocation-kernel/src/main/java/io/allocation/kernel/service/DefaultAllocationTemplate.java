@@ -42,6 +42,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The default service implementation: one rule, one input, one evidence chain.
@@ -56,9 +57,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>A run's evidence is written as it is produced, not collected and saved at the end: the sink forwards
  * each row to a {@link RunRepository.EvidenceWriter}, so the cost of a run is bounded by the rows the
- * executor holds for a stage, not by the size of its output. The remaining known limit is that progress
- * is reported at completion rather than continuously; that needs callbacks from the executor and changes
- * nothing in the contract above.
+ * executor holds for a stage, not by the size of its output. Progress is reported from the executor's own
+ * loop between pool batches, which is why {@link #status(String)} can answer "620 of 1000 pools" while
+ * the run is still going instead of answering zero until it ends.
  */
 public final class DefaultAllocationTemplate implements AllocationTemplate, AutoCloseable {
 
@@ -79,6 +80,15 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
      * the map is bounded by the queue capacity rather than by history.
      */
     private final Map<String, AtomicBoolean> cancellations = new ConcurrentHashMap<>();
+
+    /**
+     * Live progress of the runs this process is executing.
+     *
+     * <p>Separate from the repository because it is not evidence: it is a number that is true now and
+     * meaningless later. Persisting it would add a write per pool batch to the hot path in exchange for a
+     * figure that a crashed process would leave permanently wrong.
+     */
+    private final Map<String, AtomicReference<RunView.Progress>> liveProgress = new ConcurrentHashMap<>();
 
     public DefaultAllocationTemplate(RunRepository repository, RuleResolver rules, Path workingDirectory) {
         this(repository, rules, workingDirectory, 16);
@@ -171,13 +181,17 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             }
             throw e;
         }
-        // Registered before dispatch, so a cancel that arrives while the run is still queued is not lost.
+        // Registered before dispatch, so a cancel that arrives while the run is still queued is not lost,
+        // and so the first poll of a queued run already has something to report.
         cancellations.put(pending.runId(), new AtomicBoolean());
+        AtomicReference<RunView.Progress> progress = new AtomicReference<>(new RunView.Progress(0, 0, 0L));
+        liveProgress.put(pending.runId(), progress);
         workers.execute(() -> {
             try {
-                executeRun(pending, rule, spec, command, input);
+                executeRun(pending, rule, spec, command, input, progress);
             } finally {
                 cancellations.remove(pending.runId());
+                liveProgress.remove(pending.runId());
                 admission.release();
             }
         });
@@ -196,12 +210,31 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     @Override
     public RunView status(String runId) {
         RunRepository.RunRecord record = requireRun(runId);
-        List<RunRepository.PoolRecord> pools = repository.pools(runId);
         long elapsed = (record.finishedAtEpochMs() == null ? System.currentTimeMillis()
                 : record.finishedAtEpochMs()) - record.startedAtEpochMs();
-        return new RunView(runId, record.status(),
-                new RunView.Progress(pools.size(), record.poolCount(), record.rowCount()),
-                record.startedAtEpochMs(), Math.max(0L, elapsed));
+        return new RunView(runId, record.status(), progressOf(record), record.startedAtEpochMs(),
+                Math.max(0L, elapsed));
+    }
+
+    /**
+     * Progress for a run: live while it is executing, recorded once it is over.
+     *
+     * <p>The two sources answer different questions. A finished run's figures are its evidence — pools
+     * checked, rows written — and they survive a restart because they were committed with the run. A
+     * running run has no evidence yet, so without the live figure every poll of a ten-minute job would
+     * report zero, which is indistinguishable from a hang.
+     */
+    private RunView.Progress progressOf(RunRepository.RunRecord record) {
+        if (record.status().terminal()) {
+            List<RunRepository.PoolRecord> pools = repository.pools(record.runId());
+            return new RunView.Progress(pools.size(), record.poolCount(), record.rowCount());
+        }
+        AtomicReference<RunView.Progress> live = liveProgress.get(record.runId());
+        if (live != null) {
+            return live.get();
+        }
+        return new RunView.Progress(repository.pools(record.runId()).size(), record.poolCount(),
+                record.rowCount());
     }
 
     @Override
@@ -317,7 +350,8 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     // ---------------------------------------------------------------- execution
 
     private void executeRun(RunRepository.RunRecord pending, RuleResolver.RuleDocument rule,
-                            AllocationSpec spec, RunCommand command, AllocationInput data) {
+                            AllocationSpec spec, RunCommand command, AllocationInput data,
+                            AtomicReference<RunView.Progress> progress) {
         repository.update(pending.withStatus(RunRepository.Status.RUNNING));
         AtomicBoolean cancelled = cancellations.get(pending.runId());
         RunRepository.EvidenceWriter writer = repository.openEvidence(pending.runId());
@@ -328,7 +362,9 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
                     new Executor.Options(command.options().workers(),
                             command.options().failOnMissingTarget(),
                             command.options().maxRowsInMemory()),
-                    cancelled == null ? Executor.Cancellation.none() : cancelled::get);
+                    cancelled == null ? Executor.Cancellation.none() : cancelled::get,
+                    (stageId, totalPools, completedPools, rows) ->
+                            progress.set(new RunView.Progress(completedPools, totalPools, rows)));
 
             // Evidence first, status second. A poller that sees PUBLISHED can therefore always read a
             // complete result set, which is the only ordering that makes the status meaningful.

@@ -126,6 +126,35 @@ public final class Executor {
         }
     }
 
+    /**
+     * What a run reports while it is running.
+     *
+     * <p>Coarse by design: a stage's pool count is known before allocation starts and the number of
+     * completed pools is the only progress figure that cannot be wrong. Row counts are reported alongside
+     * because "620 of 1000 pools" answers "how far" and "620 000 rows" answers "how much is left to
+     * write", and a poller asking for a status usually wants both.
+     *
+     * <p>Called from the coordinator thread between pools, never concurrently, so an implementation may
+     * be a plain field write. It must also be cheap and non-blocking: it runs inside the hot loop.
+     */
+    @FunctionalInterface
+    public interface Progress {
+
+        /**
+         * @param stageId       stage being executed
+         * @param totalPools    pools in this stage
+         * @param completedPools pools finished, cumulative across the run
+         * @param rows          rows emitted, cumulative across the run
+         */
+        void progress(String stageId, int totalPools, int completedPools, long rows);
+
+        /** Reports nothing; what every caller that does not poll gets. */
+        static Progress none() {
+            return (stageId, totalPools, completedPools, rows) -> {
+            };
+        }
+    }
+
     private static final DateTimeFormatter RFC3339 =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
 
@@ -137,6 +166,7 @@ public final class Executor {
     private final String[] dimensionNames;
     private final String ruleSha256;
     private final Cancellation cancellation;
+    private final Progress progress;
 
     private final Map<String, RowStore> inbox = new HashMap<>();
     private final Map<String, Router> routers = new HashMap<>();
@@ -156,10 +186,11 @@ public final class Executor {
     private long stageOutRows;
 
     private Executor(Plan plan, String ruleSha256, AllocationInput input, RunSink sink, Options options,
-                     Cancellation cancellation) {
+                     Cancellation cancellation, Progress progress) {
         this.plan = plan;
         this.ruleSha256 = ruleSha256 == null ? "" : ruleSha256;
         this.cancellation = cancellation == null ? Cancellation.none() : cancellation;
+        this.progress = progress == null ? Progress.none() : progress;
         this.input = input;
         this.sink = sink;
         this.options = options;
@@ -186,7 +217,19 @@ public final class Executor {
      */
     public static RunSummary execute(Plan plan, String ruleSha256, AllocationInput input, RunSink sink,
                                      Options options, Cancellation cancellation) {
-        return new Executor(plan, ruleSha256, input, sink, options, cancellation).run();
+        return execute(plan, ruleSha256, input, sink, options, cancellation, Progress.none());
+    }
+
+    /**
+     * Runs the plan, reporting pool-level progress as it goes.
+     *
+     * <p>Everything reported is a number the executor already knows for a reason of its own: the pool
+     * count comes from the plan, the completed count from the loop it is in the middle of. Nothing here
+     * estimates, so a poller can trust the figure even while it is stale by one batch.
+     */
+    public static RunSummary execute(Plan plan, String ruleSha256, AllocationInput input, RunSink sink,
+                                     Options options, Cancellation cancellation, Progress progress) {
+        return new Executor(plan, ruleSha256, input, sink, options, cancellation, progress).run();
     }
 
     /** Runs without a rule digest; the summary records an empty hash. */
@@ -390,7 +433,7 @@ public final class Executor {
         List<String> keys = new ArrayList<>(groups.keySet());
         keys.sort(Utf8Order::compare);
 
-        forEachPool(keys, key -> {
+        forEachPool(stage.id(), keys, key -> {
             PoolBucket bucket = groups.get(key);
             return PoolAllocator.allocate(stage, spec, dimensionNames, key, bucket.coord, bucket.total, contexts);
         }, (key, outcome) -> {
@@ -658,7 +701,7 @@ public final class Executor {
         }
     }
 
-    private void forEachPool(List<String> keys, PoolWork work, PoolConsumer consume) {
+    private void forEachPool(String stageId, List<String> keys, PoolWork work, PoolConsumer consume) {
         if (keys.isEmpty()) {
             return;
         }
@@ -670,11 +713,16 @@ public final class Executor {
         int workers = Math.min(requested, ceiling);
         workers = Math.min(workers, keys.size());
 
+        // Reported before the first pool, so a poller learns the size of the stage while it is still
+        // useful — before that moment "how far along" has no denominator.
+        report(stageId, keys.size(), (int) poolChecks);
+
         if (workers <= 1) {
             for (String key : keys) {
                 throwIfCancelled(key);
                 PoolAllocator.Outcome outcome = work.compute(key);
                 consume.accept(key, outcome);
+                report(stageId, keys.size(), (int) poolChecks);
             }
             return;
         }
@@ -712,11 +760,24 @@ public final class Executor {
                                 "pool computation failed: " + cause, cause);
                     }
                     consume.accept(keys.get(start + i), outcome);
+                    report(stageId, keys.size(), (int) poolChecks);
                 }
             }
         } finally {
             service.shutdownNow();
         }
+    }
+
+    /**
+     * Tells the listener where the run has got to.
+     *
+     * <p>{@code poolChecks} is incremented by the consumer and {@code stageOutRows} by the emitter, so
+     * both figures are the executor's own bookkeeping rather than a second count that could drift from
+     * it. {@code outputRowsTotal} has not yet absorbed the current stage, which is why the two are added.
+     */
+    private void report(String stageId, int totalPools, int completedPools) {
+        progress.progress(stageId, totalPools, completedPools,
+                Overflow.addExact(outputRowsTotal, stageOutRows));
     }
 
     @FunctionalInterface
