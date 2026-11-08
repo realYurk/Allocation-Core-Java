@@ -1,7 +1,6 @@
 package io.allocation.kernel.service;
 
 import io.allocation.kernel.exec.RunSink;
-import io.allocation.kernel.money.Overflow;
 
 /**
  * Forwards a run's evidence straight to the repository, as it is produced.
@@ -17,9 +16,11 @@ import io.allocation.kernel.money.Overflow;
  *       then exactly one reconciliation line for that pool, so the number of ledger lines since the last
  *       reconciliation is that pool's target count. This is a dependency on the executor's documented
  *       emission order, which is why the order is documented.</li>
- *   <li><b>Totals are summed here, not re-read.</b> The run's input and output totals come from the same
- *       reconciliation lines the file sink writes, so the database and the CSV archive can never disagree
- *       about what a run moved.</li>
+ *   <li><b>Totals are not computed here at all.</b> Summing the reconciliation lines looks like the run's
+ *       input and is not: on a two-stage rule every amount enters stage one and stage two, so the sum is
+ *       exactly double, and on three stages triple. The run's totals come from the executor's own summary,
+ *       which counts the DAG's input once. This sink used to expose that sum, and a run record reported
+ *       820,000.00 for 410,000.00 of input.</li>
  * </ul>
  */
 final class RepositorySink implements RunSink {
@@ -29,8 +30,6 @@ final class RepositorySink implements RunSink {
 
     private long resultRows;
     private long poolRows;
-    private long inputAmount;
-    private long outputAmount;
     private int ledgerSinceReconciliation;
 
     /**
@@ -67,8 +66,6 @@ final class RepositorySink implements RunSink {
     @Override
     public void reconciliation(ReconciliationLine line) {
         poolRows++;
-        inputAmount = Overflow.addExact(inputAmount, line.inputAmount());
-        outputAmount = Overflow.addExact(outputAmount, line.outputAmount());
         writer.pool(new RunRepository.PoolRecord(line.stage(), line.pool(), line.inputAmount(),
                 line.outputAmount(), ledgerSinceReconciliation));
         ledgerSinceReconciliation = 0;
@@ -89,11 +86,4 @@ final class RepositorySink implements RunSink {
         return poolRows;
     }
 
-    long inputAmount() {
-        return inputAmount;
-    }
-
-    long outputAmount() {
-        return outputAmount;
-    }
 }

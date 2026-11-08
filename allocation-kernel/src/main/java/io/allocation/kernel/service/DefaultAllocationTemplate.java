@@ -10,6 +10,7 @@ import io.allocation.kernel.exec.Executor;
 import io.allocation.kernel.exec.MemorySink;
 import io.allocation.kernel.exec.Row;
 import io.allocation.kernel.exec.RunSink;
+import io.allocation.kernel.exec.RunSummary;
 import io.allocation.kernel.io.Digests;
 import io.allocation.kernel.money.Apportion;
 import io.allocation.kernel.money.Decimal;
@@ -378,7 +379,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         try {
             Plan plan = Planner.compile(spec);
             RepositorySink sink = new RepositorySink(writer, command.options().retainResultLines());
-            Executor.execute(plan, rule.sha256(), data, sink,
+            RunSummary summary = Executor.execute(plan, rule.sha256(), data, sink,
                     new Executor.Options(command.options().workers(),
                             command.options().failOnMissingTarget(),
                             command.options().maxRowsInMemory()),
@@ -389,10 +390,13 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             // Evidence first, status second. A poller that sees PUBLISHED can therefore always read a
             // complete result set, which is the only ordering that makes the status meaningful.
             writer.commit();
-            RunRepository.RunRecord published = pending.published(sink.inputAmount(), sink.outputAmount(),
+            // The executor's totals, not the sink's: on a multi-stage rule the sum of the stage inputs is a
+            // multiple of what the run actually moved, and the record must answer "how much did this run
+            // allocate" once.
+            RunRepository.RunRecord published = pending.published(summary.inputAmount(), summary.outputAmount(),
                     (int) sink.poolRows(), sink.resultRows(), System.currentTimeMillis());
             repository.update(published);
-            notify(new AllocationListener.Published(pending.runId(), sink.inputAmount(), sink.outputAmount(),
+            notify(new AllocationListener.Published(pending.runId(), summary.inputAmount(), summary.outputAmount(),
                     (int) sink.poolRows(), sink.resultRows(), published.finishedAtEpochMs()));
         } catch (AllocationException e) {
             if (e.code() == ErrorCode.CANCELLED) {

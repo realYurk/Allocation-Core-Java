@@ -40,16 +40,18 @@ class RepositorySinkTest {
     }
 
     @Test
-    void totalsComeFromTheReconciliationLines() {
+    void everyReconciliationLineBecomesOnePoolRowCarryingItsOwnAmounts() {
         FakeWriter writer = new FakeWriter();
         RepositorySink sink = new RepositorySink(writer, true);
 
         sink.reconciliation(pool("st1", "P1", 100L, 100L));
-        sink.reconciliation(pool("st2", "P1", 100L, 100L));
+        sink.reconciliation(pool("st2", "P1", 60L, 60L));
 
-        assertEquals(200L, sink.inputAmount());
-        assertEquals(200L, sink.outputAmount());
         assertEquals(2L, sink.poolRows());
+        assertEquals(List.of(100L, 60L), writer.pools.stream()
+                .map(RunRepository.PoolRecord::inputAmount).toList());
+        // The sink deliberately does not offer a run-level total: on a two-stage rule the sum of these is
+        // double what the run moved. See MultiStageTotalsTest.
     }
 
     @Test
