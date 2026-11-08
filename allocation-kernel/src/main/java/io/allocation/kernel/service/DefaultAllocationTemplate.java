@@ -185,8 +185,8 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             throw new AllocationException(ErrorCode.REQUEST_TOO_LARGE, "allocation queue is full");
         }
         RunRepository.RunRecord pending = new RunRepository.RunRecord(RunIds.next(), rule.code(), rule.sha256(),
-                key, requestDigest, spec.precision(), RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null,
-                System.currentTimeMillis(), null);
+                rule.json(), key, requestDigest, spec.precision(), RunRepository.Status.PENDING, 0L, 0L, 0, 0L,
+                null, null, System.currentTimeMillis(), null);
         try {
             repository.insert(pending);
         } catch (RuntimeException e) {
@@ -699,8 +699,45 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         return coord;
     }
 
+    /**
+     * The rule a run executed, not the rule its code happens to name today.
+     *
+     * <p>This used to be {@code SpecCodec.parse(rules.require(record.ruleCode()).json())}: the digest in
+     * the run record was recorded and never read, and the document was looked up by code. That is wrong
+     * in three ways a caller cannot see:
+     *
+     * <ul>
+     *   <li>A rule republished with a different {@code precision} makes every stored integer print at the
+     *       wrong magnitude. The numbers do not change; the comma moves.</li>
+     *   <li>Reordered dimensions relabel every coordinate, so a share is attributed to the wrong cost
+     *       centre — the one failure mode that is worse than an error message.</li>
+     *   <li>A rule retired, renamed or moved makes its own history unreadable.</li>
+     * </ul>
+     *
+     * <p>The document therefore travels with the run, and the digest is verified rather than trusted: a
+     * row edited by hand with a SQL client is caught here instead of being rendered as an authoritative
+     * answer. Rows written before the column existed have no document, and are resolved by code — with
+     * the same digest check, which is what makes the migration loud rather than silent.
+     */
     private AllocationSpec specOf(RunRepository.RunRecord record) {
-        return SpecCodec.parse(rules.require(record.ruleCode()).json());
+        String json = record.ruleJson();
+        if (json == null) {
+            RuleResolver.RuleDocument current = rules.require(record.ruleCode());
+            if (!current.sha256().equals(record.ruleSha256())) {
+                throw new AllocationException(ErrorCode.RULE_DIGEST_MISMATCH,
+                        "rule " + record.ruleCode() + " has changed since run " + record.runId()
+                                + " executed it (recorded " + record.ruleSha256() + ", current "
+                                + current.sha256() + "), and the run did not store its own copy");
+            }
+            return SpecCodec.parse(current.json());
+        }
+        String actual = SpecCodec.sha256Hex(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        if (!actual.equals(record.ruleSha256())) {
+            throw new AllocationException(ErrorCode.RULE_DIGEST_MISMATCH,
+                    "the rule stored with run " + record.runId() + " does not hash to the digest the run "
+                            + "recorded (recorded " + record.ruleSha256() + ", found " + actual + ")");
+        }
+        return SpecCodec.parse(json);
     }
 
     /**

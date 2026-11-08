@@ -66,7 +66,7 @@ class JdbcRunRepositoryTest {
 
     @Test
     void keepsAMissingFinishTimeMissing() {
-        RunRepository.RunRecord pending = new RunRepository.RunRecord("01PENDING", "rule", "sha", null, "req", 2,
+        RunRepository.RunRecord pending = new RunRepository.RunRecord("01PENDING", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null, 1_700_000_000_000L, null);
 
         repository.insert(pending);
@@ -76,7 +76,7 @@ class JdbcRunRepositoryTest {
 
     @Test
     void recordsAFailureAndItsCode() {
-        RunRepository.RunRecord pending = new RunRepository.RunRecord("01FAILED", "rule", "sha", null, "req", 2,
+        RunRepository.RunRecord pending = new RunRepository.RunRecord("01FAILED", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.PENDING, 5L, 0L, 0, 0L, null, null, 1_700_000_000_000L, null);
         repository.insert(pending);
 
@@ -112,7 +112,7 @@ class JdbcRunRepositoryTest {
 
     @Test
     void refusesToRewriteARunThatAlreadyFinished() {
-        RunRepository.RunRecord pending = new RunRepository.RunRecord("01T", "rule", "sha", null, "req", 2,
+        RunRepository.RunRecord pending = new RunRepository.RunRecord("01T", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null, 1_700_000_000_000L, null);
         repository.insert(pending);
         repository.update(pending.published(100L, 100L, 1, 2L, 1_700_000_001_000L));
@@ -291,7 +291,7 @@ class JdbcRunRepositoryTest {
     // ---------------------------------------------------------------- helpers
 
     private static RunRepository.RunRecord run(String runId, String key, long input, long output) {
-        return new RunRepository.RunRecord(runId, "rule-α", "sha-rule", key, "sha-request", 2,
+        return new RunRepository.RunRecord(runId, "rule-α", "sha-rule", null, key, "sha-request", 2,
                 RunRepository.Status.PUBLISHED, input, output, 3, 42L, null, null,
                 1_700_000_000_000L, 1_700_000_001_000L);
     }
@@ -321,7 +321,7 @@ class JdbcRunRepositoryTest {
     }
 
     private static RunRepository.RunRecord state(String runId, RunRepository.Status status, long startedAt) {
-        return new RunRepository.RunRecord(runId, "rule-α", "sha-rule", null, "sha-request", 2,
+        return new RunRepository.RunRecord(runId, "rule-α", "sha-rule", null, null, "sha-request", 2,
                 status, 0L, 0L, 0, 0L, null, null, startedAt, null);
     }
 

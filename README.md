@@ -59,7 +59,7 @@ Full ruleset: [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md).
 mvn verify
 ```
 
-That is the whole gate: 268 kernel tests, 129 golden-corpus tests, 52 starter tests and 4 example tests,
+That is the whole gate: 270 kernel tests, 129 golden-corpus tests, 52 starter tests and 4 example tests,
 including three that boot a real application on a random port and call the REST contract over HTTP. Update a
 number in `docs/` only after this passes.
 
@@ -88,6 +88,7 @@ java -jar allocation-bench/target/allocation-bench-*.jar -f 1 -wi 3 -i 5
 | Runnable example (`allocation-example`) | done — zero config, two stages, reconciles against a frozen file |
 | Data that lives in a table | done — implement `AllocationInput`, pass it as `AmountSource.Custom` (`docs/API.md` §1.2) |
 | Multi-tenancy | done — declare one `TenantProvider`; runs of other tenants are a 404 (`docs/API.md` §5.2) |
+| Rule immutability | done — a run stores its own rule bytes and verifies the digest on every read (`docs/API.md` §4, D-035) |
 | Pluggable authorisation, run lifecycle events | done (`AllocationAuthorizer`, `AllocationListener`, composed if several) |
 | Metrics for actuator/Prometheus | done — 10 run-level meters from the listener, no query per scrape (`docs/API.md` §5.1) |
 | JMH baseline + regression comparison | done (`docs/PERF.md` §7) |

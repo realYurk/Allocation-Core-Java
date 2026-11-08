@@ -272,6 +272,7 @@ allocation.submit(RunCommand.builder()
 | `ALLOC_012` | 409 | 进程中断 | 持有该 run 的进程在完成前退出；`RunRecovery.abandonInterrupted` 把 `RUNNING`/`PENDING` 记录钉成 `FAILED` + 本码。**不会作为 HTTP 错误返回**——它是 run 记录上的失败原因，调用方从 §2.3 的 `status` 看到 `FAILED` |
 | `ALLOC_013` | 422 | 幂等键无法验证 | `AmountSource.Custom` 的输入没有返回 fingerprint，却又带了 idempotencyKey。拒绝而不是"当作一样"：同 key 不同数据时返回上一次的答案，是错误答案伪装成缓存命中（见 §1.2） |
 | `ALLOC_014` | 404 | 没有这个 run | id 不存在，**或者它属于另一个租户**（§5.2）。两者同一个码：告诉调用方"不是你的"就等于确认这个 id 是真的，而 run id 是陌生人与一家公司成本明细之间唯一的东西。在本次之前的版本里这种情况返回 `400` + `ALLOC_001`，那是把"找不到"说成了"你的规则有问题" |
+| `ALLOC_015` | 500 | 规则摘要不匹配 | run 存的规则字节与它记录的 digest 对不上——有人用 SQL 客户端改了行、同名规则被重新发布、或磁盘文件变了。此时这些整数该用什么 precision、什么维度顺序来打印已经说不清，回答它们是"看起来权威的错误数字"。`500` 不是 `400`：请求没问题，是服务端的控制文档坏了 |
 
 **规则**：错误响应必须含 `stageId` / `allocationId` / `poolKey`（若适用），否则视为实现不完整。
 
@@ -313,6 +314,16 @@ PostgreSQL 的旧约束名是 `allocation_run_idempotency_key_key`）。SQLite �
 不可见"的历史，这正是升级时的正确语义。
 
 如果已经建过 `allocation_reconcile`，直接 `DROP TABLE`：没有任何代码写它（D-033）。
+
+**规则随 run 走**：`allocation_run` 还存着一列 `rule_json`——这个 run 执行的规则文档，逐字节。它的意义见
+D-035：一个 run 必须能用自己执行时的那份规则来解释自己的整数，而不是用"今天同名规则"。`rule_sha256` 是这
+些字节的 digest，读取时会被**验证**而不是采信；一列存 JSON 而不是 `JSON`/`jsonb` 类型，是因为 MySQL 的
+`JSON` 与 PostgreSQL 的 `jsonb` 都会重新排版（键序、空白、数字格式），而 digest 是原始字节的摘要——被数据库
+重排过的文档会让每个 run 都通不过自己的完整性检查。
+
+**旧库升级**（还没有 `rule_json` 列的）：`ALTER TABLE allocation_run ADD COLUMN rule_json LONGTEXT NULL`
+（PostgreSQL 用 `TEXT`）。存量行的这一列为 `NULL`，读取时退回"按 code 查当前规则 + 校验 digest"的老路径——
+如果规则没变，照常可读；如果变了，报 `ALLOC_015` 而不是给出一个错位的答案。这正是这次迁移要响亮的信号。
 
 **金额约定**：所有 `*_amount` 列都是「10^-precision 个最小单位」的整数，precision 来自规则（0..6）。`123456` 在 precision=2 时表示 `1234.56`。用 `BIGINT` 而不是 `DECIMAL`，是为了让数据库里存的值和
 引擎里算的值是同一个整数，搬运过程中不可能发生二次舍入。

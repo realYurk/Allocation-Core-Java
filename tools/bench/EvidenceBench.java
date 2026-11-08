@@ -57,7 +57,7 @@ public final class EvidenceBench {
             }
         }
         JdbcRunRepository repository = new JdbcRunRepository(source);
-        repository.insert(new RunRepository.RunRecord("bench", "rule", "sha", null, "req", 2,
+        repository.insert(new RunRepository.RunRecord("bench", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.RUNNING, 0, 0, 0, 0, null, null, System.currentTimeMillis(), null));
 
         long started = System.nanoTime();

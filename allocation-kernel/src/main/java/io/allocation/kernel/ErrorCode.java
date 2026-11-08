@@ -67,7 +67,21 @@ public enum ErrorCode {
      * exists is a leak. Answering {@code 404} for both is also the only answer that is true for a
      * mistyped id, which is the common case.
      */
-    RUN_NOT_FOUND("ALLOC_014");
+    RUN_NOT_FOUND("ALLOC_014"),
+
+    /**
+     * A stored rule is not the document the run recorded.
+     *
+     * <p>Every run stores the digest of the rule it executed. If the document read back later does not
+     * hash to that digest — because somebody edited the row with a SQL client, because a rule was
+     * republished under the same code, or because the file changed on disk — then the labels this run's
+     * integers would be printed with (precision, dimension order) are no longer the ones that produced
+     * them. Answering with those labels is a wrong number that looks authoritative.
+     *
+     * <p>{@code 500}, not {@code 400}: the caller's request is fine, the server's control document is
+     * not, and retrying with a different body will not help.
+     */
+    RULE_DIGEST_MISMATCH("ALLOC_015");
 
     private final String code;
 

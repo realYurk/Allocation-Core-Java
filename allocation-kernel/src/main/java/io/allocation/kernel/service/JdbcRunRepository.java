@@ -61,17 +61,17 @@ public final class JdbcRunRepository implements RunRepository {
     private static final int BATCH_SIZE = 1_000;
 
     private static final String INSERT_RUN = """
-            INSERT INTO allocation_run (run_id, tenant_id, rule_code, rule_sha256, idempotency_key,
-                                        request_sha256, precision, status, input_amount, output_amount,
-                                        pool_count, row_count, engine_version, failure_code, failure_message,
-                                        started_at, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO allocation_run (run_id, tenant_id, rule_code, rule_sha256, rule_json,
+                                        idempotency_key, request_sha256, precision, status, input_amount,
+                                        output_amount, pool_count, row_count, engine_version, failure_code,
+                                        failure_message, started_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     private static final String SELECT_RUN = """
-            SELECT run_id, rule_code, rule_sha256, idempotency_key, request_sha256, precision, status,
-                   input_amount, output_amount, pool_count, row_count, failure_code, failure_message,
-                   started_at, finished_at
+            SELECT run_id, rule_code, rule_sha256, rule_json, idempotency_key, request_sha256, precision,
+                   status, input_amount, output_amount, pool_count, row_count, failure_code,
+                   failure_message, started_at, finished_at
               FROM allocation_run
             """;
 
@@ -451,22 +451,23 @@ public final class JdbcRunRepository implements RunRepository {
             statement.setString(2, Objects.requireNonNullElse(tenant(), ""));
             statement.setString(3, run.ruleCode());
             statement.setString(4, run.ruleSha256());
-            statement.setString(5, run.idempotencyKey());
-            statement.setString(6, run.requestSha256());
-            statement.setInt(7, run.precision());
-            statement.setString(8, run.status().name());
-            statement.setLong(9, run.inputAmount());
-            statement.setLong(10, run.outputAmount());
-            statement.setInt(11, run.poolCount());
-            statement.setLong(12, run.rowCount());
-            statement.setString(13, engineVersion);
-            statement.setString(14, run.failureCode());
-            statement.setString(15, run.failureMessage());
-            statement.setLong(16, run.startedAtEpochMs());
+            statement.setString(5, run.ruleJson());
+            statement.setString(6, run.idempotencyKey());
+            statement.setString(7, run.requestSha256());
+            statement.setInt(8, run.precision());
+            statement.setString(9, run.status().name());
+            statement.setLong(10, run.inputAmount());
+            statement.setLong(11, run.outputAmount());
+            statement.setInt(12, run.poolCount());
+            statement.setLong(13, run.rowCount());
+            statement.setString(14, engineVersion);
+            statement.setString(15, run.failureCode());
+            statement.setString(16, run.failureMessage());
+            statement.setLong(17, run.startedAtEpochMs());
             if (run.finishedAtEpochMs() == null) {
-                statement.setNull(17, java.sql.Types.BIGINT);
+                statement.setNull(18, java.sql.Types.BIGINT);
             } else {
-                statement.setLong(17, run.finishedAtEpochMs());
+                statement.setLong(18, run.finishedAtEpochMs());
             }
             statement.executeUpdate();
         } catch (SQLException e) {
@@ -798,10 +799,11 @@ public final class JdbcRunRepository implements RunRepository {
         long finished = rs.getLong("finished_at");
         Long finishedAt = rs.wasNull() ? null : finished;
         return new RunRecord(rs.getString("run_id"), rs.getString("rule_code"), rs.getString("rule_sha256"),
-                rs.getString("idempotency_key"), rs.getString("request_sha256"), rs.getInt("precision"),
-                Status.valueOf(rs.getString("status")), rs.getLong("input_amount"), rs.getLong("output_amount"),
-                rs.getInt("pool_count"), rs.getLong("row_count"), rs.getString("failure_code"),
-                rs.getString("failure_message"), rs.getLong("started_at"), finishedAt);
+                rs.getString("rule_json"), rs.getString("idempotency_key"), rs.getString("request_sha256"),
+                rs.getInt("precision"), Status.valueOf(rs.getString("status")), rs.getLong("input_amount"),
+                rs.getLong("output_amount"), rs.getInt("pool_count"), rs.getLong("row_count"),
+                rs.getString("failure_code"), rs.getString("failure_message"), rs.getLong("started_at"),
+                finishedAt);
     }
 
     /**

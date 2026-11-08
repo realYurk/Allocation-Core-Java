@@ -84,7 +84,7 @@ class ProgressReportingTest {
         // 100,000-pool run would pull 100,000 rows to display a number the run row already holds.
         InMemoryRunRepository repository = new InMemoryRunRepository();
         long now = System.currentTimeMillis();
-        RunRepository.RunRecord run = new RunRepository.RunRecord("abandoned", "rule", "sha", null, "req", 2,
+        RunRepository.RunRecord run = new RunRepository.RunRecord("abandoned", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null, now, null);
         repository.insert(run);
         repository.savePools("abandoned", java.util.List.of(
@@ -111,7 +111,7 @@ class ProgressReportingTest {
     void aQueuedRunReportsNothingRatherThanFailing() {        // The run is submitted against a rule that does not exist, so it never starts; status must still
         // answer, because a poller that gets an error for a run it just submitted has no recovery path.
         InMemoryRunRepository repository = new InMemoryRunRepository();
-        repository.insert(new RunRepository.RunRecord("queued", "rule", "sha", null, "req", 2,
+        repository.insert(new RunRepository.RunRecord("queued", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null, System.currentTimeMillis(), null));
         DefaultAllocationTemplate template = new DefaultAllocationTemplate(repository,
                 new DirectoryRuleResolver(directory), directory.resolve("work"));

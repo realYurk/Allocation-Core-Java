@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   tenant_id       TEXT    NOT NULL DEFAULT '',
   rule_code       TEXT    NOT NULL,
   rule_sha256     TEXT    NOT NULL,
+  -- The rule this run executed, byte for byte. TEXT and not a JSON type on purpose: MySQL's JSON and
+  -- PostgreSQL's jsonb both normalise what you put in (key order, whitespace, number formatting), and the
+  -- digest recorded above is a digest of the exact bytes. A database that reformats the document would
+  -- make every run fail its own integrity check.
+  rule_json       TEXT,
   idempotency_key TEXT,
   request_sha256  TEXT    NOT NULL,
   status          TEXT    NOT NULL,

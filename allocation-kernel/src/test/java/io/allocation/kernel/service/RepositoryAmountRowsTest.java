@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RepositoryAmountRowsTest {
 
     private static RunRepository.RunRecord running(String runId) {
-        return new RunRepository.RunRecord(runId, "rule", "sha", null, "request-" + runId, 2,
+        return new RunRepository.RunRecord(runId, "rule", "sha", null, null, "request-" + runId, 2,
                 RunRepository.Status.PUBLISHED, 0, 0, 0, 0, null, null, 0L, 0L);
     }
 

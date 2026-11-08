@@ -229,7 +229,7 @@ class AllocationControllerTest {
 
     @Test
     void resultOfAnUnpublishedRunIsAConflict() throws Exception {
-        repository.insert(new RunRepository.RunRecord("run-pending", "rule", "sha", null, "req", 2,
+        repository.insert(new RunRepository.RunRecord("run-pending", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null, System.currentTimeMillis(), null));
 
         mvc.perform(get("/allocation/runs/{runId}/result", "run-pending"))
@@ -367,7 +367,7 @@ class AllocationControllerTest {
         for (ErrorCode code : ErrorCode.values()) {
             assertTrue(AllocationExceptionHandler.statusOf(code).isError(), code + " is not an error status");
         }
-        assertEquals(14, ErrorCode.values().length, "docs/API.md §3 must list every code");
+        assertEquals(15, ErrorCode.values().length, "docs/API.md §3 must list every code");
     }
 
     // ---------------------------------------------------------------- helpers

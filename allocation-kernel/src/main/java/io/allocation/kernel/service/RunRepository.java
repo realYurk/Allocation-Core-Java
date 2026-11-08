@@ -37,25 +37,31 @@ public interface RunRepository {
      * @param precision     decimal places the amounts in this run are scaled to; an amount without it
      *                      is an integer of unknown magnitude, so it is stored with the run rather than
      *                      re-derived from whatever rule happens to be current when someone reads it
+     * @param ruleJson      the rule document this run executed, byte for byte. {@code ruleSha256} alone
+     *                      was decoration: it recorded which document was executed but not what it said,
+     *                      so every read path re-read *today's* document by code and used its precision
+     *                      and dimension order to label yesterday's integers. Storing the bytes makes a
+     *                      run able to prove its own rule, and makes the digest checkable instead of
+     *                      merely recorded. {@code null} on rows written before this column existed.
      */
-    record RunRecord(String runId, String ruleCode, String ruleSha256, String idempotencyKey,
+    record RunRecord(String runId, String ruleCode, String ruleSha256, String ruleJson, String idempotencyKey,
                      String requestSha256, int precision, Status status, long inputAmount, long outputAmount,
                      int poolCount, long rowCount, String failureCode, String failureMessage,
                      long startedAtEpochMs, Long finishedAtEpochMs) {
 
         public RunRecord withStatus(Status next) {
-            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, precision,
+            return new RunRecord(runId, ruleCode, ruleSha256, ruleJson, idempotencyKey, requestSha256, precision,
                     next, inputAmount, outputAmount, poolCount, rowCount, failureCode, failureMessage,
                     startedAtEpochMs, finishedAtEpochMs);
         }
 
         public RunRecord published(long input, long output, int pools, long rows, long finishedAt) {
-            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, precision,
+            return new RunRecord(runId, ruleCode, ruleSha256, ruleJson, idempotencyKey, requestSha256, precision,
                     Status.PUBLISHED, input, output, pools, rows, null, null, startedAtEpochMs, finishedAt);
         }
 
         public RunRecord failed(String code, String message, long finishedAt) {
-            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, precision,
+            return new RunRecord(runId, ruleCode, ruleSha256, ruleJson, idempotencyKey, requestSha256, precision,
                     Status.FAILED, inputAmount, outputAmount, poolCount, rowCount, code, message,
                     startedAtEpochMs, finishedAt);
         }
@@ -68,7 +74,7 @@ public interface RunRepository {
          * The failure fields are cleared, since a cancellation has no error to report.
          */
         public RunRecord cancelled(long finishedAt) {
-            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, precision,
+            return new RunRecord(runId, ruleCode, ruleSha256, ruleJson, idempotencyKey, requestSha256, precision,
                     Status.CANCELLED, inputAmount, outputAmount, poolCount, rowCount, null, null,
                     startedAtEpochMs, finishedAt);
         }

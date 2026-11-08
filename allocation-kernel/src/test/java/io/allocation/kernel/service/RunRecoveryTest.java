@@ -22,7 +22,7 @@ class RunRecoveryTest {
     private final InMemoryRunRepository repository = new InMemoryRunRepository();
 
     private void insert(String runId, RunRepository.Status status, long startedAt) {
-        repository.insert(new RunRepository.RunRecord(runId, "rule", "sha", null, "req", 2, status,
+        repository.insert(new RunRepository.RunRecord(runId, "rule", "sha", null, null, "req", 2, status,
                 0L, 0L, 0, 0L, null, null, startedAt, null));
     }
 
@@ -64,7 +64,7 @@ class RunRecoveryTest {
         // The record says RUNNING, but the update guard only rewrites a row that is still PENDING or
         // RUNNING. A repository that wins the race must not be reported as abandoned: the count is a
         // statement about what happened, not about what was attempted.
-        repository.insert(new RunRepository.RunRecord("01RACY", "rule", "sha", null, "req", 2,
+        repository.insert(new RunRepository.RunRecord("01RACY", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.RUNNING, 0L, 0L, 0, 0L, null, null, BOOT - 60_000L, null));
 
         RunRepository racing = new Delegating(repository) {

@@ -39,7 +39,7 @@ abstract class TenantIsolationContract {
     }
 
     private RunRepository.RunRecord pending(String runId, String idempotencyKey) {
-        return new RunRepository.RunRecord(runId, "cost-allocation", "a".repeat(64), idempotencyKey,
+        return new RunRepository.RunRecord(runId, "cost-allocation", "a".repeat(64), null, idempotencyKey,
                 "b".repeat(64), 2, RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null,
                 1_700_000_000_000L, null);
     }

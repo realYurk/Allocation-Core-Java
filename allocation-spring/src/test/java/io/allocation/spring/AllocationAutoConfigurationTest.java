@@ -217,7 +217,7 @@ class AllocationAutoConfigurationTest {
     void optionallyAbandonsRunsLeftByAPreviousProcess(@TempDir Path directory) {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         repository.insert(new io.allocation.kernel.service.RunRepository.RunRecord("01STRANDED", "rule", "sha",
-                null, "req", 2, io.allocation.kernel.service.RunRepository.Status.RUNNING, 0L, 0L, 0, 0L,
+                null, null, "req", 2, io.allocation.kernel.service.RunRepository.Status.RUNNING, 0L, 0L, 0, 0L,
                 null, null, 1L, null));
 
         runner.withBean(RunRepository.class, () -> repository)
@@ -237,7 +237,7 @@ class AllocationAutoConfigurationTest {
     void leavesStrandedRunsAloneWhenTheSweepIsNotEnabled(@TempDir Path directory) {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         repository.insert(new io.allocation.kernel.service.RunRepository.RunRecord("01STRANDED", "rule", "sha",
-                null, "req", 2, io.allocation.kernel.service.RunRepository.Status.RUNNING, 0L, 0L, 0, 0L,
+                null, null, "req", 2, io.allocation.kernel.service.RunRepository.Status.RUNNING, 0L, 0L, 0, 0L,
                 null, null, 1L, null));
 
         runner.withBean(RunRepository.class, () -> repository)

@@ -234,7 +234,7 @@ class DefaultAllocationTemplateTest {
 
     @Test
     void resultsAreOnlyVisibleOncePublished() {
-        repository.insert(new RunRepository.RunRecord("run-pending", "rule", "sha", null, "req", 2,
+        repository.insert(new RunRepository.RunRecord("run-pending", "rule", "sha", null, null, "req", 2,
                 RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null, System.currentTimeMillis(), null));
 
         AllocationException e = assertThrows(AllocationException.class, () -> template.result("run-pending", 1, 10));
