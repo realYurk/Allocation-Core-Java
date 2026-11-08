@@ -138,6 +138,13 @@ public final class CsvInput implements AllocationInput {
 
     @Override
     public List<DriverRow> readDrivers(String dataset, String weightField) {
+        List<DriverRow> rows = new ArrayList<>(4096);
+        forEachDriver(dataset, weightField, rows::add);
+        return rows;
+    }
+
+    @Override
+    public void forEachDriver(String dataset, String weightField, Consumer<DriverRow> consumer) {
         Path path = driverPaths.get(dataset);
         if (path == null) {
             throw new AllocationException(ErrorCode.RULE_INVALID, "unknown driver dataset " + dataset);
@@ -167,16 +174,16 @@ public final class CsvInput implements AllocationInput {
                 throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
                         path + " has no matching dimensions");
             }
-            return readDrivers(path, reader, dimensions, weightPosition, dimensionPositions);
+            readDrivers(path, reader, dimensions, weightPosition, dimensionPositions, consumer);
         } catch (IOException e) {
             throw new AllocationException(ErrorCode.INTERNAL, "cannot read " + path, e);
         }
     }
 
-    private List<DriverRow> readDrivers(Path path, StreamingCsvReader reader, List<String> dimensions,
-                                        int weightPosition, int[] dimensionPositions) throws IOException {
+    private void readDrivers(Path path, StreamingCsvReader reader, List<String> dimensions,
+                             int weightPosition, int[] dimensionPositions, Consumer<DriverRow> consumer)
+            throws IOException {
         MemberDictionary dictionary = new MemberDictionary(dimensionPositions.length);
-        List<DriverRow> rows = new ArrayList<>(4096);
         List<String> record;
         int line = 1;
         while ((record = reader.read()) != null) {
@@ -203,9 +210,8 @@ public final class CsvInput implements AllocationInput {
                 throw new AllocationException(ErrorCode.AMOUNT_OUT_OF_RANGE,
                         path + ":" + line + " invalid weight: " + e.detail());
             }
-            rows.add(new DriverRow(new Coord(members), weight));
+            consumer.accept(new DriverRow(new Coord(members), weight));
         }
-        return rows;
     }
 
     @Override

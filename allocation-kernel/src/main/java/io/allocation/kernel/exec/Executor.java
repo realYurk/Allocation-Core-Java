@@ -122,7 +122,7 @@ public final class Executor {
     private final List<RowStore> stores = new ArrayList<>();
     private final SpillSpace spill = new SpillSpace();
     private final Map<String, String> dataSha256 = new LinkedHashMap<>();
-    private final Map<String, List<DriverRow>> driverCache = new HashMap<>();
+    private final Map<String, DriverTable> driverCache = new HashMap<>();
     private final List<RunSummary.StageSummary> stageSummaries = new ArrayList<>();
     private final List<RunSink.Warning> warnings = new ArrayList<>();
 
@@ -379,20 +379,35 @@ public final class Executor {
                 continue;
             }
             String cacheKey = rule.driverDataset() + '\0' + rule.weightField();
-            List<DriverRow> rows = driverCache.get(cacheKey);
-            if (rows == null) {
-                rows = input.readDrivers(rule.driverDataset(), rule.weightField());
-                driverCache.put(cacheKey, rows);
+            DriverTable drivers = driverCache.get(cacheKey);
+            if (drivers == null) {
+                drivers = loadDrivers(rule.driverDataset(), rule.weightField());
+                driverCache.put(cacheKey, drivers);
                 recordFingerprint(rule.driverDataset(), rule.weightField());
             }
             long share = io.allocation.kernel.money.Decimal.parseScaled(rule.effectiveShare(), 6);
             PoolAllocator.RuleContext context =
-                    PoolAllocator.build(rule, share, rows, stage, spec, dimensionNames);
+                    PoolAllocator.build(rule, share, drivers, stage, spec, dimensionNames);
             contexts.add(context);
             checkTargetCompleteness(stage, context);
             warnOnDuplicateDrivers(stage, rule, context);
         }
         return contexts;
+    }
+
+    /**
+     * Reads a driver dataset straight into a column table.
+     *
+     * <p>The rows are never held: each one is appended and dropped, so the only thing that grows is the
+     * table itself. That matters because a driver table is compulsory resident memory — it cannot spill,
+     * since a pool needs random access to its targets' weights — so its representation is the floor of a
+     * wide allocation.
+     */
+    private DriverTable loadDrivers(String dataset, String weightField) {
+        DriverTable.Builder builder = DriverTable.builder(dimensionNames.length);
+        input.forEachDriver(dataset, weightField,
+                row -> builder.add(row.coord().members(), row.weight()));
+        return builder.build();
     }
 
     private void checkTargetCompleteness(StageSpec stage, PoolAllocator.RuleContext context) {
@@ -412,12 +427,14 @@ public final class Executor {
         for (int i = 0; i < derivedCount; i++) {
             present[i] = new HashSet<>();
         }
-        for (List<DriverRow> bucket : context.buckets.values()) {
-            for (DriverRow row : bucket) {
+        DriverTable drivers = context.drivers;
+        for (PoolAllocator.Rows bucket : context.buckets.values()) {
+            for (int b = 0; b < bucket.size; b++) {
+                int row = bucket.data[b];
                 for (int i = 0; i < derivedCount; i++) {
                     int position = derived[i];
-                    if (row.coord().has(position)) {
-                        present[i].add(row.coord().member(position));
+                    if (drivers.has(row, position)) {
+                        present[i].add(drivers.member(row, position));
                     }
                 }
             }
@@ -456,13 +473,16 @@ public final class Executor {
     private void warnOnDuplicateDrivers(StageSpec stage, AllocationRule rule,
                                         PoolAllocator.RuleContext context) {
         int duplicates = 0;
-        for (List<DriverRow> bucket : context.buckets.values()) {
-            if (bucket.size() < 2) {
+        DriverTable drivers = context.drivers;
+        for (PoolAllocator.Rows bucket : context.buckets.values()) {
+            if (bucket.size < 2) {
                 continue;
             }
-            Set<String> keys = new HashSet<>(bucket.size() * 2);
-            for (DriverRow row : bucket) {
-                if (!keys.add(row.coord().key())) {
+            // One coordinate object per row instead of one key string per row: the check is the same,
+            // the allocation is a fraction of it, and nothing is retained past this loop.
+            Set<Coord> seen = new HashSet<>(bucket.size * 2);
+            for (int b = 0; b < bucket.size; b++) {
+                if (!seen.add(drivers.coord(bucket.data[b]))) {
                     duplicates++;
                 }
             }

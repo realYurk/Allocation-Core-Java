@@ -44,19 +44,38 @@ final class PoolAllocator {
         final AllocationRule rule;
         final long share;
         final int[] boundPositions;
-        final Map<String, List<DriverRow>> buckets;
+        final DriverTable drivers;
+        final Map<String, Rows> buckets;
         final MemberFilter[] driverFilters;
         final MemberFilter[] targetChecks;
 
-        private RuleContext(AllocationRule rule, long share, int[] boundPositions,
-                            Map<String, List<DriverRow>> buckets,
+        private RuleContext(AllocationRule rule, long share, int[] boundPositions, DriverTable drivers,
+                            Map<String, Rows> buckets,
                             MemberFilter[] driverFilters, MemberFilter[] targetChecks) {
             this.rule = rule;
             this.share = share;
             this.boundPositions = boundPositions;
+            this.drivers = drivers;
             this.buckets = buckets;
             this.driverFilters = driverFilters;
             this.targetChecks = targetChecks;
+        }
+    }
+
+    /** A growable list of driver row indices, one bucket per pool. */
+    static final class Rows {
+        int[] data = new int[8];
+        int size;
+
+        void add(int row) {
+            if (size == data.length) {
+                data = java.util.Arrays.copyOf(data, size + (size >> 1) + 1);
+            }
+            data[size++] = row;
+        }
+
+        boolean isEmpty() {
+            return size == 0;
         }
     }
 
@@ -77,7 +96,7 @@ final class PoolAllocator {
     // ---------------------------------------------------------------------------------------------
 
     /** Builds the per-rule driver index. Called once per rule per stage, never per pool. */
-    static RuleContext build(AllocationRule rule, long share, List<DriverRow> driverRows,
+    static RuleContext build(AllocationRule rule, long share, DriverTable drivers,
                              StageSpec stage, AllocationSpec spec, String[] dimensionNames) {
         int dimCount = dimensionNames.length;
         MemberFilter[] driverFilters = new MemberFilter[dimCount];
@@ -96,47 +115,47 @@ final class PoolAllocator {
             }
         }
 
+        int rows = drivers.rowCount();
         int[] bound = new int[0];
-        if (!driverRows.isEmpty()) {
+        if (rows > 0) {
             int[] tmp = new int[dimCount];
             int count = 0;
             for (int i = 0; i < dimCount; i++) {
                 TargetSpec target = stage.target().get(dimensionNames[i]);
-                if (target != null && target.mode() == TargetMode.SOURCE && driverRows.get(0).coord().has(i)) {
+                if (target != null && target.mode() == TargetMode.SOURCE && drivers.has(0, i)) {
                     tmp[count++] = i;
                 }
             }
             bound = Arrays.copyOf(tmp, count);
         }
 
-        Map<String, List<DriverRow>> buckets = new HashMap<>();
-        if (!driverRows.isEmpty()) {
-            for (DriverRow row : driverRows) {
-                if (!passesFilters(row, driverFilters, dimensionNames, "driver filter requires missing column")) {
-                    continue;
-                }
-                if (!passesFilters(row, targetChecks, dimensionNames,
-                        "target mode INCLUDE requires missing driver dimension")) {
-                    continue;
-                }
-                buckets.computeIfAbsent(CoordKeys.at(row.coord(), bound), k -> new ArrayList<>()).add(row);
+        Map<String, Rows> buckets = new HashMap<>();
+        for (int row = 0; row < rows; row++) {
+            if (!passesFilters(drivers, row, driverFilters, dimensionNames,
+                    "driver filter requires missing column")) {
+                continue;
             }
+            if (!passesFilters(drivers, row, targetChecks, dimensionNames,
+                    "target mode INCLUDE requires missing driver dimension")) {
+                continue;
+            }
+            buckets.computeIfAbsent(CoordKeys.at(drivers.coord(row), bound), k -> new Rows()).add(row);
         }
-        return new RuleContext(rule, share, bound, buckets, driverFilters, targetChecks);
+        return new RuleContext(rule, share, bound, drivers, buckets, driverFilters, targetChecks);
     }
 
-    private static boolean passesFilters(DriverRow row, MemberFilter[] filters, String[] dimensionNames,
-                                         String missingMessage) {
+    private static boolean passesFilters(DriverTable drivers, int row, MemberFilter[] filters,
+                                         String[] dimensionNames, String missingMessage) {
         for (int i = 0; i < filters.length; i++) {
             MemberFilter filter = filters[i];
             if (filter == null || filter.isNoOp()) {
                 continue;
             }
-            if (!row.coord().has(i)) {
+            if (!drivers.has(row, i)) {
                 throw new AllocationException(ErrorCode.RULE_INVALID,
                         missingMessage + " " + dimensionNames[i]);
             }
-            if (!filter.test(row.coord().member(i))) {
+            if (!filter.test(drivers.member(row, i))) {
                 return false;
             }
         }
@@ -157,16 +176,18 @@ final class PoolAllocator {
      */
     static Candidates candidates(RuleContext context, StageSpec stage, Coord pool, String[] dimensionNames) {
         String bucketKey = CoordKeys.at(pool, context.boundPositions);
-        List<DriverRow> bucket = context.buckets.get(bucketKey);
+        Rows bucket = context.buckets.get(bucketKey);
         if (bucket == null || bucket.isEmpty()) {
             return new Candidates(new Coord[0], new long[0], new String[0]);
         }
         int dimCount = dimensionNames.length;
-        Map<String, Long> grouped = new HashMap<>(bucket.size() * 2);
-        Map<String, Coord> targets = new HashMap<>(bucket.size() * 2);
+        DriverTable drivers = context.drivers;
+        Map<String, Long> grouped = new HashMap<>(bucket.size * 2);
+        Map<String, Coord> targets = new HashMap<>(bucket.size * 2);
         String[] members = new String[dimCount];
 
-        for (DriverRow row : bucket) {
+        for (int b = 0; b < bucket.size; b++) {
+            int row = bucket.data[b];
             boolean good = true;
             for (int i = 0; i < dimCount; i++) {
                 TargetSpec target = stage.target().get(dimensionNames[i]);
@@ -176,13 +197,13 @@ final class PoolAllocator {
                 }
                 switch (target.mode()) {
                     case SOURCE -> {
-                        if (row.coord().has(i) && !row.coord().member(i).equals(pool.member(i))) {
+                        if (drivers.has(row, i) && !drivers.member(row, i).equals(pool.member(i))) {
                             good = false;
                         }
                         members[i] = pool.member(i);
                     }
                     case ELEMENT -> members[i] = target.value();
-                    case INCLUDE, INCLUDE_EXCLUDE -> members[i] = row.coord().member(i);
+                    case INCLUDE, INCLUDE_EXCLUDE -> members[i] = drivers.member(row, i);
                 }
                 if (!good) {
                     break;
@@ -191,7 +212,7 @@ final class PoolAllocator {
             if (!good) {
                 continue;
             }
-            long weight = row.weight();
+            long weight = drivers.weight(row);
             if (weight < 0 && !context.rule.allowsSigned()) {
                 throw new AllocationException(ErrorCode.RULE_INVALID,
                         "negative driver requires ALLOW_SIGNED: " + context.rule.id(),

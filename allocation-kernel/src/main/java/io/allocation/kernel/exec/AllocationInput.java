@@ -35,6 +35,20 @@ public interface AllocationInput {
     List<DriverRow> readDrivers(String dataset, String weightField);
 
     /**
+     * Streams the driver dataset, one row at a time, in the same order as {@link #readDrivers}.
+     *
+     * <p>The engine builds a compact column table from this stream instead of keeping the rows, so an
+     * implementation that can read a file or a cursor row by row should override it: the difference is
+     * whether a million-row driver file costs 30MB or 90MB of resident heap, and a driver table cannot
+     * be spilled because allocation needs random access to it.
+     */
+    default void forEachDriver(String dataset, String weightField, Consumer<DriverRow> consumer) {
+        for (DriverRow row : readDrivers(dataset, weightField)) {
+            consumer.accept(row);
+        }
+    }
+
+    /**
      * Label under which the dataset's hash is recorded in the run summary, for example a resolved path.
      * Defaults to the dataset name.
      */

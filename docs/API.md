@@ -14,7 +14,7 @@
 | 数据库 schema（`ddl/`） | ✅ 已实现：MySQL 8 / PostgreSQL 15+ / SQLite，SQLite 版本由 `SchemaTest` 实际执行 |
 | 存储适配器 | ✅ JDBC（`JdbcRunRepository`，零运行时依赖，由 `JdbcRunRepositoryTest` 与 `JdbcServiceTest` 对真实库验证）；MyBatis 适配器可选，非必需 |
 | REST 控制器（§2）与 starter 装配（§6） | ⬜ 契约已冻结，按本文档实现即可；服务层是它们唯一的下游 |
-| 引擎执行器 | ✅ 已实现：金额流式读入、阶段缓冲区按预算溢写磁盘、池级有序并行；1000 万行 / 64MB 堆可完成（`docs/PERF.md`）。**限制**：驱动表全量常驻 |
+| 引擎执行器 | ✅ 已实现：金额流式读入、阶段缓冲区按预算溢写磁盘、驱动表列式常驻、池级有序并行；1000 万行金额或 100 万行驱动都在 64MB 堆内可完成（`docs/PERF.md`）。**限制**：驱动表必须整体常驻（列式，约 28 字节/行） |
 
 本节以下的 REST 与配置契约**已经定稿**：实现时不得改字段，只能增字段。
 
@@ -276,9 +276,11 @@ allocation:
 
 SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应触碰内核代码。
 
-> **内核级输入契约（已实现）**：`AllocationInput` 除了返回列表的 `readAmounts`，还提供
-> `forEachAmount(dataset, consumer)`。执行器只走流式这一条。宿主自己实现的输入（JDBC 游标、
-> 对象存储流等）**应当覆盖它**——默认实现会把整表读进 `List`，正确性一分不差，堆会差一个数量级。
+> **内核级输入契约（已实现）**：`AllocationInput` 除了返回列表的 `readAmounts` / `readDrivers`，还提供
+> `forEachAmount(dataset, consumer)` 与 `forEachDriver(dataset, weightField, consumer)`。执行器只走流式
+> 这两条。宿主自己实现的输入（JDBC 游标、对象存储流等）**应当覆盖它们**——默认实现会把整表读进 `List`，
+> 正确性一分不差，堆会差一个数量级。金额行流式读入后进可溢写的 `RowStore`；驱动行流式读入后进列式
+> `DriverTable`（驱动不能溢写，因为分摊要随机访问权重）。
 > 运行期内存预算：`Executor.Options.maxRowsInMemory`（默认 250,000 行，超过即溢写临时文件），
 > 命令行对应 `--max-rows N`。
 
