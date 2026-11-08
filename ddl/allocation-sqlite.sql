@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   idempotency_key TEXT,
   request_sha256  TEXT    NOT NULL,
   status          TEXT    NOT NULL,
-  precision       INTEGER NOT NULL,
+  scale           INTEGER NOT NULL,
   input_amount    INTEGER NOT NULL DEFAULT 0,
   output_amount   INTEGER NOT NULL DEFAULT 0,
   pool_count      INTEGER NOT NULL DEFAULT 0,
@@ -45,14 +45,20 @@ CREATE TABLE IF NOT EXISTS allocation_run (
 CREATE INDEX IF NOT EXISTS idx_run_rule_time ON allocation_run (rule_code, create_time);
 CREATE INDEX IF NOT EXISTS idx_run_status ON allocation_run (status, create_time);
 
+-- A pool's balance proof, one row per pool per stage. The primary key is (run_id, seq) rather than
+-- (run_id, stage_id, pool_key) for the same reason allocation_line and allocation_result use a seq:
+-- pool_key is an arbitrary-length coordinate key (a JSON array of members), and making it part of a
+-- primary key forces a length cap that the coordinate's own semantics do not have. seq is the dense,
+-- per-run emission order the repository already assigns everywhere else.
 CREATE TABLE IF NOT EXISTS allocation_pool (
   run_id        TEXT    NOT NULL REFERENCES allocation_run (run_id) ON DELETE CASCADE,
+  seq           INTEGER NOT NULL,
   stage_id      TEXT    NOT NULL,
   pool_key      TEXT    NOT NULL,
   input_amount  INTEGER NOT NULL,
   output_amount INTEGER NOT NULL,
   target_count  INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (run_id, stage_id, pool_key)
+  PRIMARY KEY (run_id, seq)
 );
 
 CREATE TABLE IF NOT EXISTS allocation_line (

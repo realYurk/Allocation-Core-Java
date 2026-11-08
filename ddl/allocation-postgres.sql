@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   idempotency_key VARCHAR(128),
   request_sha256  CHAR(64)     NOT NULL,
   status          VARCHAR(16)  NOT NULL,
-  precision       SMALLINT     NOT NULL,
+  scale           SMALLINT     NOT NULL,
   input_amount    BIGINT       NOT NULL DEFAULT 0,
   output_amount   BIGINT       NOT NULL DEFAULT 0,
   pool_count      INTEGER      NOT NULL DEFAULT 0,
@@ -41,14 +41,19 @@ CREATE TABLE IF NOT EXISTS allocation_run (
 CREATE INDEX IF NOT EXISTS idx_run_rule_time ON allocation_run (rule_code, create_time);
 CREATE INDEX IF NOT EXISTS idx_run_status ON allocation_run (status, create_time);
 
+-- A pool's balance proof, one row per pool per stage. The primary key is (run_id, seq) rather than
+-- (run_id, stage_id, pool_key) for the same reason allocation_line and allocation_result use a seq:
+-- pool_key is an arbitrary-length coordinate key, and a coordinate column must not be part of a primary
+-- key (which is what forced MySQL's otherwise-pointless VARCHAR(1024) cap).
 CREATE TABLE IF NOT EXISTS allocation_pool (
   run_id        VARCHAR(32)   NOT NULL REFERENCES allocation_run (run_id) ON DELETE CASCADE,
+  seq           BIGINT        NOT NULL,
   stage_id      VARCHAR(64)   NOT NULL,
   pool_key      TEXT          NOT NULL,
   input_amount  BIGINT        NOT NULL,
   output_amount BIGINT        NOT NULL,
   target_count  INTEGER       NOT NULL DEFAULT 0,
-  PRIMARY KEY (run_id, stage_id, pool_key)
+  PRIMARY KEY (run_id, seq)
 );
 
 CREATE TABLE IF NOT EXISTS allocation_line (

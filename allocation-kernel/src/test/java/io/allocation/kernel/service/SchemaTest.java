@@ -109,15 +109,15 @@ class SchemaTest {
         assertThrows(SQLException.class, () -> {
             try (Connection connection = connect(); Statement statement = connection.createStatement()) {
                 statement.execute("INSERT INTO allocation_pool"
-                        + " (run_id, stage_id, pool_key, input_amount, output_amount, target_count)"
-                        + " VALUES ('nope', 'st1', '[1]', 1, 1, 1)");
+                        + " (run_id, seq, stage_id, pool_key, input_amount, output_amount, target_count)"
+                        + " VALUES ('nope', 1, 'st1', '[1]', 1, 1, 1)");
             }
         });
     }
 
     private void insertRun(String runId, String idempotencyKey, long input, long output) throws SQLException {
         String sql = "INSERT INTO allocation_run (run_id, rule_code, rule_sha256, idempotency_key,"
-                + " request_sha256, status, precision, input_amount, output_amount, pool_count, row_count,"
+                + " request_sha256, status, scale, input_amount, output_amount, pool_count, row_count,"
                 + " engine_version, started_at) VALUES ('" + runId + "', 'rule', 'sha', "
                 + (idempotencyKey == null ? "NULL" : "'" + idempotencyKey + "'")
                 + ", 'req', 'PUBLISHED', 2, " + input + ", " + output + ", 0, 0, '1.0.0', 0)";

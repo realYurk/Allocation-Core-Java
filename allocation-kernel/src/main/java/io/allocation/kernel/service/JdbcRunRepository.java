@@ -62,14 +62,14 @@ public final class JdbcRunRepository implements RunRepository {
 
     private static final String INSERT_RUN = """
             INSERT INTO allocation_run (run_id, tenant_id, rule_code, rule_sha256, rule_json,
-                                        idempotency_key, request_sha256, precision, status, input_amount,
+                                        idempotency_key, request_sha256, scale, status, input_amount,
                                         output_amount, pool_count, row_count, engine_version, failure_code,
                                         failure_message, started_at, finished_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     private static final String SELECT_RUN = """
-            SELECT run_id, rule_code, rule_sha256, rule_json, idempotency_key, request_sha256, precision,
+            SELECT run_id, rule_code, rule_sha256, rule_json, idempotency_key, request_sha256, scale,
                    status, input_amount, output_amount, pool_count, row_count, failure_code,
                    failure_message, started_at, finished_at
               FROM allocation_run
@@ -83,8 +83,8 @@ public final class JdbcRunRepository implements RunRepository {
             """;
 
     private static final String INSERT_POOL = """
-            INSERT INTO allocation_pool (run_id, stage_id, pool_key, input_amount, output_amount, target_count)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO allocation_pool (run_id, seq, stage_id, pool_key, input_amount, output_amount, target_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """;
 
     private static final String SELECT_POOL = """
@@ -222,11 +222,12 @@ public final class JdbcRunRepository implements RunRepository {
         public void pool(PoolRecord record) {
             try {
                 poolStatement.setString(1, runId);
-                poolStatement.setString(2, record.stageId());
-                poolStatement.setString(3, record.poolKey());
-                poolStatement.setLong(4, record.inputAmount());
-                poolStatement.setLong(5, record.outputAmount());
-                poolStatement.setInt(6, record.targetCount());
+                poolStatement.setLong(2, ++seq);
+                poolStatement.setString(3, record.stageId());
+                poolStatement.setString(4, record.poolKey());
+                poolStatement.setLong(5, record.inputAmount());
+                poolStatement.setLong(6, record.outputAmount());
+                poolStatement.setInt(7, record.targetCount());
                 poolStatement.addBatch();
                 count();
             } catch (SQLException e) {
@@ -533,13 +534,15 @@ public final class JdbcRunRepository implements RunRepository {
         inTransaction("save pool evidence", connection -> {
             try (PreparedStatement statement = connection.prepareStatement(INSERT_POOL)) {
                 int pending = 0;
+                long seq = 0L;
                 for (PoolRecord pool : pools) {
                     statement.setString(1, runId);
-                    statement.setString(2, pool.stageId());
-                    statement.setString(3, pool.poolKey());
-                    statement.setLong(4, pool.inputAmount());
-                    statement.setLong(5, pool.outputAmount());
-                    statement.setInt(6, pool.targetCount());
+                    statement.setLong(2, ++seq);
+                    statement.setString(3, pool.stageId());
+                    statement.setString(4, pool.poolKey());
+                    statement.setLong(5, pool.inputAmount());
+                    statement.setLong(6, pool.outputAmount());
+                    statement.setInt(7, pool.targetCount());
                     statement.addBatch();
                     if (++pending == BATCH_SIZE) {
                         statement.executeBatch();
@@ -801,7 +804,7 @@ public final class JdbcRunRepository implements RunRepository {
         Long finishedAt = rs.wasNull() ? null : finished;
         return new RunRecord(rs.getString("run_id"), rs.getString("rule_code"), rs.getString("rule_sha256"),
                 rs.getString("rule_json"), rs.getString("idempotency_key"), rs.getString("request_sha256"),
-                rs.getInt("precision"), Status.valueOf(rs.getString("status")), rs.getLong("input_amount"),
+                rs.getInt("scale"), Status.valueOf(rs.getString("status")), rs.getLong("input_amount"),
                 rs.getLong("output_amount"), rs.getInt("pool_count"), rs.getLong("row_count"),
                 rs.getString("failure_code"), rs.getString("failure_message"), rs.getLong("started_at"),
                 finishedAt);

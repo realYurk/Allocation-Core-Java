@@ -26,7 +26,10 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   idempotency_key VARCHAR(128)     NULL,
   request_sha256  CHAR(64)     NOT NULL,
   status          VARCHAR(16)  NOT NULL,
-  precision       TINYINT      NOT NULL,
+  -- The rule's precision (decimal places, 0..6). Named `scale`, not `precision`, on purpose: PRECISION
+  -- is a reserved word in both MySQL and PostgreSQL, and the repository sends one SQL string to all three
+  -- dialects. A reserved-word column name would force dialect-specific quoting into every statement.
+  scale           TINYINT      NOT NULL,
   input_amount    BIGINT       NOT NULL DEFAULT 0,
   output_amount   BIGINT       NOT NULL DEFAULT 0,
   pool_count      INT          NOT NULL DEFAULT 0,
@@ -46,14 +49,21 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   KEY idx_status (status, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- A pool's balance proof, one row per pool per stage. The primary key is (run_id, seq) rather than
+-- (run_id, stage_id, pool_key): pool_key is an arbitrary-length coordinate key (a JSON array of members,
+-- up to 30 dimensions), so it cannot be a primary-key column in MySQL — a full VARCHAR(1024) under
+-- utf8mb4 is 4096 bytes, well past InnoDB's 3072-byte key limit, and primary keys take no prefix. Giving
+-- the table the same (run_id, seq) spine as allocation_line and allocation_result removes a length cap
+-- the coordinate's semantics never had.
 CREATE TABLE IF NOT EXISTS allocation_pool (
   run_id        VARCHAR(32) NOT NULL,
+  seq           BIGINT      NOT NULL,
   stage_id      VARCHAR(64) NOT NULL,
-  pool_key      VARCHAR(1024) NOT NULL,
+  pool_key      LONGTEXT    NOT NULL,
   input_amount  BIGINT      NOT NULL,
   output_amount BIGINT      NOT NULL,
   target_count  INT         NOT NULL DEFAULT 0,
-  PRIMARY KEY (run_id, stage_id, pool_key),
+  PRIMARY KEY (run_id, seq),
   CONSTRAINT fk_pool_run FOREIGN KEY (run_id) REFERENCES allocation_run (run_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -62,8 +72,11 @@ CREATE TABLE IF NOT EXISTS allocation_line (
   seq              BIGINT       NOT NULL,
   stage_id         VARCHAR(64)  NOT NULL,
   rule_id          VARCHAR(64)  NOT NULL,
-  pool_key         VARCHAR(1024) NOT NULL,
-  target_key       VARCHAR(1024) NOT NULL,
+  -- Coordinate keys have no length cap (a rule declares up to 30 dimensions of arbitrary business
+  -- strings), so these are LONGTEXT, not VARCHAR. The prefix lengths on idx_line_target / idx_line_pool
+  -- exist only to satisfy InnoDB's 3072-byte index limit; reading a full key reads the row, not the index.
+  pool_key         LONGTEXT     NOT NULL,
+  target_key       LONGTEXT     NOT NULL,
   target_row_id    VARCHAR(128)  NOT NULL,
   pool_amount      BIGINT       NOT NULL,
   share_amount     BIGINT       NOT NULL,
@@ -87,7 +100,7 @@ CREATE TABLE IF NOT EXISTS allocation_result (
   seq        BIGINT        NOT NULL,
   stage_id   VARCHAR(64)   NOT NULL,
   row_id     VARCHAR(128)  NOT NULL,
-  coordinate VARCHAR(1024) NOT NULL,
+  coordinate LONGTEXT      NOT NULL,
   amount     BIGINT        NOT NULL,
   PRIMARY KEY (run_id, seq),
   CONSTRAINT fk_result_run FOREIGN KEY (run_id) REFERENCES allocation_run (run_id) ON DELETE CASCADE
