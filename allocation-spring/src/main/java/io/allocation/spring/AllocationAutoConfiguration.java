@@ -1,5 +1,6 @@
 package io.allocation.spring;
 
+import io.allocation.kernel.service.AllocationListener;
 import io.allocation.kernel.service.AllocationTemplate;
 import io.allocation.kernel.service.DefaultAllocationTemplate;
 import io.allocation.kernel.service.DirectoryRuleResolver;
@@ -54,13 +55,27 @@ public class AllocationAutoConfiguration {
         return new DirectoryRuleResolver(properties.getRulesDirectory());
     }
 
-    /** The engine facade the controllers (and any host code) call. */
-    @Bean(destroyMethod = "close")
+    /**
+     * The engine facade the controllers (and any host code) call.
+     *
+     * <p>If the host declared an {@link AllocationAuthorizer}, the template is wrapped in
+     * {@link AuthorizingAllocationTemplate} so every endpoint passes through it. If it did not, the raw
+     * template is returned: a decorator that checks a permit-all rule is a stack frame on the hot path
+     * bought with nothing.
+     *
+     * <p>A listener is passed only when a host declared one, for the same reason.
+     */
+    @Bean
     @ConditionalOnMissingBean
     public AllocationTemplate allocationTemplate(RunRepository repository, RuleResolver rules,
-                                                 AllocationProperties properties) {
-        return new DefaultAllocationTemplate(repository, rules, properties.getWorkingDirectory(),
-                properties.getQueueCapacity());
+                                                 AllocationProperties properties,
+                                                 ObjectProvider<AllocationAuthorizer> authorizer,
+                                                 ObjectProvider<AllocationListener> listener) {
+        AllocationTemplate engine = new DefaultAllocationTemplate(repository, rules,
+                properties.getWorkingDirectory(), properties.getQueueCapacity(),
+                listener.getIfAvailable(AllocationListener::noop));
+        AllocationAuthorizer guard = authorizer.getIfAvailable();
+        return guard == null ? engine : new AuthorizingAllocationTemplate(engine, guard);
     }
 
     /**

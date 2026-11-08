@@ -72,6 +72,68 @@ class AllocationAutoConfigurationTest {
     }
 
     @Test
+    void anAuthorizerBeanIsWrappedAroundTheEngine(@TempDir Path directory) {
+        runner.withBean(AllocationAuthorizer.class, () -> (action, runId) -> {
+                })
+                .withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory)
+                .run(context -> assertInstanceOf(AuthorizingAllocationTemplate.class,
+                        context.getBean(AllocationTemplate.class)));
+    }
+
+    @Test
+    void withoutAnAuthorizerTheEngineIsNotWrapped(@TempDir Path directory) {
+        // A decorator that checks a permit-all rule on every call is a frame bought with nothing, so the
+        // wrapper must appear only when a host asked for it.
+        runner.withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory)
+                .run(context -> assertInstanceOf(io.allocation.kernel.service.DefaultAllocationTemplate.class,
+                        context.getBean(AllocationTemplate.class)));
+    }
+
+    @Test
+    void aListenerBeanReceivesTheLifecycleOfARun(@TempDir Path directory) throws java.io.IOException {
+        // A real run through the bean the context built, because "the listener was accepted as a bean" and
+        // "the listener is called" are different claims and only the second one is useful.
+        java.nio.file.Files.writeString(directory.resolve("probe.json"), """
+                {"schema":"allocation-ir/2.0","rounding_policy":"LARGEST_REMAINDER_IDENTITY",
+                 "name":"probe","precision":2,"dimensions":["plant","account"],
+                 "immutable_dimensions":[],"hierarchies":{},
+                 "datasets":{"amounts":{"amounts":"probe-amounts.csv"},
+                             "drivers":{"drivers":"probe-drivers.csv"}},
+                 "stages":[{"id":"st1","inputs":[{"from":"amounts","share":"1"}],
+                   "source":{"grouping":{"plant":"AS_IS","account":"TOTAL"},"filters":{}},
+                   "target":{"plant":{"mode":"SOURCE"},
+                             "account":{"mode":"INCLUDE","include":["A1"]}},
+                   "conservation_keys":["plant"],
+                   "allocations":[{"id":"r1","share":"1","driver_dataset":"drivers",
+                                   "weight_field":"weight"}]}]}
+                """, java.nio.charset.StandardCharsets.UTF_8);
+        java.nio.file.Files.writeString(directory.resolve("probe-amounts.csv"),
+                "plant,account,amount\nP1,SRC,10.00\n", java.nio.charset.StandardCharsets.UTF_8);
+        java.nio.file.Files.writeString(directory.resolve("probe-drivers.csv"),
+                "plant,account,weight\nP1,A1,1\n", java.nio.charset.StandardCharsets.UTF_8);
+
+        java.util.List<io.allocation.kernel.service.AllocationListener.Event> events =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        runner.withBean(io.allocation.kernel.service.AllocationListener.class, () -> events::add)
+                .withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory)
+                .run(context -> {
+                    AllocationTemplate template = context.getBean(AllocationTemplate.class);
+                    AllocationTemplate.SubmitResult submitted = template.submit(
+                            io.allocation.kernel.service.RunCommand.builder()
+                                    .ruleCode("probe")
+                                    .source(new io.allocation.kernel.service.AmountSource.Csv(directory))
+                                    .build());
+                    template.await(submitted.runId(), java.time.Duration.ofSeconds(10));
+
+                    assertEquals(java.util.List.of("Submitted", "Started", "Published"),
+                            events.stream().map(e -> e.getClass().getSimpleName()).toList());
+                });
+    }
+
+    @Test
     void theWebLayerIsRegisteredInAServletApplication(@TempDir Path directory) {
         new WebApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(AllocationAutoConfiguration.class,

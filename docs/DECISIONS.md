@@ -444,3 +444,46 @@ MySQL 8 / PostgreSQL 上可接受。
   所有者 + 心跳"，那是多实例部署的完整方案，属于 P9 的剩余部分。
 - 被清理的 run 已经产出的证据不会被删除：`saveXxx` 从未提交过（D-015），所以库里本来就没有它的结果行；
   但如果有实现把证据直接写进了库，需要自己处理——接口的 `EvidenceWriter` 语义已经写明"不 commit 即丢弃"。
+
+---
+
+## D-023 事件是一个接口，鉴权是一层装饰
+
+**状态**：已接受
+
+**背景**：`docs/API.md` §6 的扩展点表里有两项长期写着"⬜ 计划中"：`AllocationListener` 与
+`AllocationAuthorizer`。它们是最容易糊弄的两项——写一个没人实现的接口，表格就绿了。真正要回答的是两个结构性
+问题：事件用什么形状，鉴权放在哪一层。
+
+**决策一：`AllocationListener` 只有一个方法 `on(Event)`，事件是 sealed 层次。**
+
+- 五个 `onPublished` / `onFailed` 之类的方法，是把将来一定会增加的事件类型提前钉死在宿主已经编译过的名字上。
+  一个 sealed 层次加一个方法，扩展方式是**加一个变体**；宿主 switch 里留 `default` 即可（这条写进了 javadoc，
+  而不是留给别人以后踩）。
+- 监听器**在运行自己的线程上**被回调，异常被捕获并记日志。正常情况吞异常是错的，这里的替代方案是"一个指标上报
+  组件把分摊打挂"，明显更坏。
+- **池级不是事件**。10 万池会产生 10 万条事件，而池级进度已经由 `Executor.Progress` 以计数器提供——热路径上
+  读一个数，不分配对象。把"进度"和"事件"分开，是这个接口能保持五个变体的原因。
+- 取消**单独一个变体**，不并进 `Failed`，理由与 D-019 相同：有人改主意不是故障，看板必须分得开。
+
+**决策二：`AllocationAuthorizer` 是 `allocation-spring` 里的装饰器，不是内核参数。**
+
+- 内核没有"调用者"这个概念。要加就得给 `AllocationTemplate` 的每个方法加一个 `Caller` 参数，而这个参数由宿主
+  填、内核无法验证——那是一个看起来像安全、实际上只是礼貌的字段。接口自己的 javadoc 早就写了正确的做法：
+  "宿主可以替换成装饰器——鉴权、指标、试运行——而不用继承实现"。这条决策就是那句话被实现一次。
+- **先检查，后做事**。装饰器在调用引擎之前检查，所以拒绝的请求不建 run、不读规则、不开连接。副作用是
+  "无权读某个 run"与"这个 run 不存在"返回同一个 403——否则无权调用方可以用状态码枚举 run id。这条有测试
+  （`AuthorizationTest.aRefusedReadDoesNotRevealWhetherTheRunExists`）。
+- **只在宿主声明了 Bean 时才包**。`permitAll` 的装饰器是一次纯开销的栈帧，所以 `ObjectProvider.getIfAvailable()`
+  返回空时直接给原对象。
+- **进程内调用不受约束**，并且写在了接口文档里。宿主自己的代码已经是可信代码；它若需要同一套规则，就该自己
+  调用 `check`——那一行代码知道调用者是谁，而装饰器不知道。
+
+**顺带修掉的一个坑**：`@Bean(destroyMethod = "close")` 在返回类型是接口时会启动失败（"Invalid destruction
+signature"），因为 Spring 按**声明类型**校验销毁方法，而 `AllocationTemplate` 没有 `close`。改成依赖 Spring 的
+推断（按**实际实例类型**找 `close`/`shutdown`），并让装饰器实现 `AutoCloseable` 转发给被装饰者——否则包一层之后
+引擎的线程池永远不会被关，测试里看不出来，生产里表现为"停不下来"。
+
+**已知代价**：`TenantProvider` / `DataScopeProvider` 仍未实现。多租户不是加一个 SPI 就完事：`allocation_run` 要有
+`tenant_id`，唯一键要变成 `(tenant_id, idempotency_key)`，所有查询要带租户条件——那是一次 schema 变更加一次
+仓储重写，值得单独一次提交，而不该混在事件与鉴权里。

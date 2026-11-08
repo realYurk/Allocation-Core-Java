@@ -71,6 +71,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     private final Path workingDirectory;
     private final Semaphore admission;
     private final ExecutorService workers;
+    private final AllocationListener listener;
 
     /**
      * Runs this process owns, and the flag that asks each one to stop.
@@ -96,12 +97,22 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
 
     public DefaultAllocationTemplate(RunRepository repository, RuleResolver rules, Path workingDirectory,
                                      int queueCapacity) {
+        this(repository, rules, workingDirectory, queueCapacity, AllocationListener.noop());
+    }
+
+    /**
+     * @param listener notified of every run's lifecycle; called on the run's own thread, never allowed to
+     *                 break the run
+     */
+    public DefaultAllocationTemplate(RunRepository repository, RuleResolver rules, Path workingDirectory,
+                                     int queueCapacity, AllocationListener listener) {
         this.repository = repository;
         this.rules = rules;
         this.workingDirectory = workingDirectory.toAbsolutePath();
         this.admission = new Semaphore(queueCapacity);
         this.workers = Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual().name("allocation-run-", 0).factory());
+        this.listener = listener == null ? AllocationListener.noop() : listener;
     }
 
     @Override
@@ -159,6 +170,10 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
                     throw new AllocationException(ErrorCode.IDEMPOTENCY_CONFLICT,
                             "idempotency key " + key + " was used for a different rule or input");
                 }
+                // Reported, but marked as a replay: a host counting submissions per rule wants to see
+                // retries, and a host counting work done wants to skip them. One event answers both.
+                notify(new AllocationListener.Submitted(record.runId(), rule.code(), true,
+                        System.currentTimeMillis()));
                 return new SubmitResult(record.runId(), record.status(), true);
             }
         }
@@ -176,6 +191,8 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             if (key != null) {
                 Optional<RunRepository.RunRecord> winner = repository.findByIdempotencyKey(key);
                 if (winner.isPresent() && winner.get().requestSha256().equals(requestDigest)) {
+                    notify(new AllocationListener.Submitted(winner.get().runId(), rule.code(), true,
+                            System.currentTimeMillis()));
                     return new SubmitResult(winner.get().runId(), winner.get().status(), true);
                 }
             }
@@ -186,6 +203,8 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         cancellations.put(pending.runId(), new AtomicBoolean());
         AtomicReference<RunView.Progress> progress = new AtomicReference<>(new RunView.Progress(0, 0, 0L));
         liveProgress.put(pending.runId(), progress);
+        notify(new AllocationListener.Submitted(pending.runId(), rule.code(), false,
+                System.currentTimeMillis()));
         workers.execute(() -> {
             try {
                 executeRun(pending, rule, spec, command, input, progress);
@@ -353,6 +372,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
                             AllocationSpec spec, RunCommand command, AllocationInput data,
                             AtomicReference<RunView.Progress> progress) {
         repository.update(pending.withStatus(RunRepository.Status.RUNNING));
+        notify(new AllocationListener.Started(pending.runId(), System.currentTimeMillis()));
         AtomicBoolean cancelled = cancellations.get(pending.runId());
         RunRepository.EvidenceWriter writer = repository.openEvidence(pending.runId());
         try {
@@ -369,21 +389,46 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             // Evidence first, status second. A poller that sees PUBLISHED can therefore always read a
             // complete result set, which is the only ordering that makes the status meaningful.
             writer.commit();
-            repository.update(pending.published(sink.inputAmount(), sink.outputAmount(),
-                    (int) sink.poolRows(), sink.resultRows(), System.currentTimeMillis()));
+            RunRepository.RunRecord published = pending.published(sink.inputAmount(), sink.outputAmount(),
+                    (int) sink.poolRows(), sink.resultRows(), System.currentTimeMillis());
+            repository.update(published);
+            notify(new AllocationListener.Published(pending.runId(), sink.inputAmount(), sink.outputAmount(),
+                    (int) sink.poolRows(), sink.resultRows(), published.finishedAtEpochMs()));
         } catch (AllocationException e) {
             if (e.code() == ErrorCode.CANCELLED) {
                 // No commit, so the writer's close discards everything this run produced: a cancelled run
                 // must not leave rows that a later reader could mistake for an answer.
                 repository.update(pending.cancelled(System.currentTimeMillis()));
+                notify(new AllocationListener.Cancelled(pending.runId(), System.currentTimeMillis()));
                 return;
             }
-            recordFailure(pending, e.code().code(), truncate(e.getMessage()), e);
+            recordFailure(pending, e.code().code(), truncate(e.getMessage()), e, e.code());
         } catch (RuntimeException e) {
-            recordFailure(pending, ErrorCode.INTERNAL.code(), truncate(String.valueOf(e)), e);
+            recordFailure(pending, ErrorCode.INTERNAL.code(), truncate(String.valueOf(e)), e, ErrorCode.INTERNAL);
         } finally {
             // No-op after a successful commit; otherwise it discards whatever the failed run wrote.
             writer.close();
+        }
+    }
+
+    /**
+     * Tells the listener about an event, and survives whatever the listener does with it.
+     *
+     * <p>A listener is host code running inside the engine's own thread. If it throws, the run it was
+     * observing must not be the thing that dies — so the exception is logged and dropped. Swallowing an
+     * exception is normally the wrong call; here the alternative is a metrics exporter taking down
+     * allocations, which is a strictly worse failure.
+     */
+    private void notify(AllocationListener.Event event) {
+        if (listener == AllocationListener.noop()) {
+            return;
+        }
+        try {
+            listener.on(event);
+        } catch (RuntimeException e) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "allocation listener failed on " + event.getClass().getSimpleName() + " for run "
+                            + event.runId() + ": " + e, e);
         }
     }
 
@@ -395,7 +440,8 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
      * record could not be recorded is the only thing left to do, and it goes to the JDK logger because
      * the kernel carries no logging dependency.
      */
-    private void recordFailure(RunRepository.RunRecord pending, String code, String message, RuntimeException cause) {
+    private void recordFailure(RunRepository.RunRecord pending, String code, String message, RuntimeException cause,
+                               ErrorCode taxonomy) {
         try {
             repository.update(pending.failed(code, message, System.currentTimeMillis()));
         } catch (RuntimeException e) {
@@ -403,6 +449,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
                     "run " + pending.runId() + " failed with " + code + " and could not be marked failed: " + e,
                     cause);
         }
+        notify(new AllocationListener.Failed(pending.runId(), taxonomy, message, System.currentTimeMillis()));
     }
 
     private static String truncate(String text) {

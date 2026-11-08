@@ -280,12 +280,22 @@ allocation:
 | `RuleResolver` | `DirectoryRuleResolver`（`allocation.rules-directory`） | ✅ 已实现 | 规则从库/配置中心来 |
 | `AllocationInput` | `CsvInput` | ✅ 已实现 | 覆盖流式的 `forEachAmount` / `forEachDriver` |
 | `Executor.Progress` | 无操作 | ✅ 已实现 | 运行期进度（池数/行数）的外部上报 |
-| `AllocationListener` | 无操作 | ⬜ 计划中 | 运行事件（开始/池完成/发布/失败） |
-| `AllocationAuthorizer` | 全部放行 | ⬜ 计划中 | 接若依 `@PreAuthorize` |
+| `AllocationListener` | 无操作 | ✅ 已实现 | 运行事件（提交/开始/发布/失败/取消） |
+| `AllocationAuthorizer` | 全部放行 | ✅ 已实现（`allocation-spring`） | 接若依 `@PreAuthorize` |
 | `TenantProvider` / `DataScopeProvider` | 固定值 / 不限制 | ⬜ 计划中 | 接若依租户与 `@DataScope` |
 
-SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应触碰内核代码。标 ⬜ 的三项在实现前不发布接口，
+SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应触碰内核代码。标 ⬜ 的一项在实现前不发布接口，
 因为一个没有默认行为、也没有调用点的接口，只会让宿主提前依赖一个还会变的名字。
+
+**事件的粒度**：`AllocationListener` 只报运行级事件，不报池级事件——一次 10 万池的运行会产出 10 万条事件，
+而池级进度已经由 `Executor.Progress` 以计数器形式提供（热路径上读一个数，不分配对象）。事件在**运行自己的
+线程上**回调，实现必须快且不得抛异常；引擎会捕获并记日志，所以一个坏监听器不会把成功的运行变成失败的运行。
+
+**鉴权在边界，不在内核**。`AllocationAuthorizer` 是 `allocation-spring` 里的装饰器（`AuthorizingAllocationTemplate`），
+在调用引擎之前检查，所以被拒绝的请求不会建 run、不读规则、不开连接；顺带保证了"无权读"与"不存在"返回同一个
+403，不泄露 run id 是否存在。内核不认识"调用者"，编造一个它无法验证的身份比承认边界在这里更糟。
+**进程内调用不受此项约束**：宿主自己调用 `AllocationTemplate` 的代码已经被宿主信任，需要同一套规则就自己调
+`check` —— 那一行代码知道调用者是谁，而这个接口不知道。
 
 > **内核级输入契约（已实现）**：`AllocationInput` 除了返回列表的 `readAmounts` / `readDrivers`，还提供
 > `forEachAmount(dataset, consumer)` 与 `forEachDriver(dataset, weightField, consumer)`。执行器只走流式
@@ -306,7 +316,24 @@ SPI 原则：**默认实现必须能在空配置下工作**；宿主替换不应
 4. `application.yml` 加 `allocation:` 段（可全部省略）
 5. 准备规则 JSON：放进 `allocation.rules-directory`，文件名即规则码（`<ruleCode>.json`）；
    从库里读规则则声明一个 `RuleResolver` Bean
-6. 实现（可选）`AllocationAuthorizer` → 关联若依权限（⬜ 接口尚未发布，见 §6）
+6. 实现（可选）`AllocationAuthorizer` Bean → 关联若依权限；声明之后引擎会被自动包一层，七个端点全部经过它：
+
+   ```java
+   @Bean
+   AllocationAuthorizer allocationAuthorizer() {
+       return (action, runId) -> {
+           String permission = switch (action) {
+               case PREVIEW, SUBMIT -> "allocation:run:add";
+               case READ, EXPLAIN -> "allocation:run:query";
+               case CANCEL -> "allocation:run:cancel";
+               case RECONCILE -> "allocation:run:reconcile";
+           };
+           if (!SecurityUtils.hasPermi(permission)) {
+               throw new AllocationException(ErrorCode.FORBIDDEN, "缺少权限 " + permission);
+           }
+       };
+   }
+   ```
 7. 用若依代码生成器，对 `allocation_run` / `allocation_pool` 生成管理页面
 8. 调用 `POST /allocation/preview` 验证一个池
 9. 调用 `POST /allocation/runs` 跑全量，轮询 `GET /allocation/runs/{id}`
