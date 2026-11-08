@@ -2,6 +2,9 @@ package io.allocation.kernel.service;
 
 import io.allocation.kernel.ErrorCode;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Observes the lifecycle of runs.
  *
@@ -50,6 +53,64 @@ public interface AllocationListener {
 
         @Override
         public void on(Event event) {
+        }
+    }
+
+    /**
+     * One listener that forwards to several, in the order given.
+     *
+     * <p>The engine takes one listener and a host routinely has two: its own audit hook, plus whatever
+     * the starter installs (metrics, tracing, a test probe). Before this method existed the host had to
+     * write the fan-out itself, and the obvious implementation — a lambda that calls each in turn — has a
+     * defect that only shows up in production: the first listener that throws stops the ones after it.
+     * Here each call is isolated, so a broken audit hook cannot also silence the metrics.
+     *
+     * <p>{@link Noop} instances are dropped and a single remaining listener is returned as-is, both so
+     * that {@link DefaultAllocationTemplate} keeps its identity fast path. An empty list yields {@link
+     * #noop()}.
+     */
+    static AllocationListener allOf(List<AllocationListener> listeners) {
+        List<AllocationListener> targets = new ArrayList<>(listeners.size());
+        for (AllocationListener listener : listeners) {
+            if (listener != null && listener != Noop.INSTANCE) {
+                targets.add(listener);
+            }
+        }
+        if (targets.isEmpty()) {
+            return Noop.INSTANCE;
+        }
+        return targets.size() == 1 ? targets.get(0) : new Composite(targets);
+    }
+
+    /**
+     * The fan-out returned by {@link #allOf(List)}.
+     *
+     * <p>Package-visible only through {@code allOf}; a host that wants ordering guarantees gets them from
+     * the order it passed in.
+     */
+    final class Composite implements AllocationListener {
+
+        private static final System.Logger LOG = System.getLogger(Composite.class.getName());
+
+        private final List<AllocationListener> targets;
+
+        Composite(List<AllocationListener> targets) {
+            this.targets = List.copyOf(targets);
+        }
+
+        @Override
+        public void on(Event event) {
+            for (int i = 0; i < targets.size(); i++) {
+                try {
+                    targets.get(i).on(event);
+                } catch (RuntimeException | Error failure) {
+                    // Swallowed on purpose: the engine's own guard would end the run's listener calls for
+                    // this event, and the other listeners have not been told yet.
+                    LOG.log(System.Logger.Level.WARNING, "allocation listener " + (i + 1) + " of "
+                            + targets.size() + " failed on " + event.getClass().getSimpleName()
+                            + " for run " + event.runId(), failure);
+                }
+            }
         }
     }
 

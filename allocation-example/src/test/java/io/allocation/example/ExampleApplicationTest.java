@@ -109,8 +109,28 @@ class ExampleApplicationTest {
         assertEquals(Boolean.TRUE, body.get("idempotentReplay"));
     }
 
-    // ------------------------------------------------------------------ helpers
+    @Test
+    @SuppressWarnings("unchecked")
+    void theStarterPublishesRunMetricsToTheActuatorEndpoint() {
+        // Actuator is on this module's classpath and nothing else was configured, so this asserts the
+        // whole optional path at once: the auto-configuration found the MeterRegistry, the listener was
+        // composed into the engine, and the demo run's publish is visible where an operator looks.
+        ResponseEntity<Map> response = rest.getForEntity(
+                "/actuator/metrics/allocation.run.finished?tag=outcome:published", Map.class);
+        assertEquals(HttpStatus.OK, response.getStatusCode(), String.valueOf(response.getBody()));
 
+        Map<String, Object> body = response.getBody();
+        assertNotNull(body);
+        List<Map<String, Object>> measurements = (List<Map<String, Object>>) body.get("measurements");
+        double count = measurements.stream()
+                .filter(m -> "COUNT".equals(m.get("statistic")))
+                .mapToDouble(m -> ((Number) m.get("value")).doubleValue())
+                .findFirst()
+                .orElse(0.0);
+        assertEquals(1.0, count, "the demo run is the only published run in this context");
+    }
+
+    // ------------------------------------------------------------------ helpers
     private static Map<String, Object> data(ResponseEntity<Map> response) {
         return data(response, 200);
     }

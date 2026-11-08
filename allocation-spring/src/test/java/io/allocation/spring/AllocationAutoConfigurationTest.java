@@ -95,24 +95,7 @@ class AllocationAutoConfigurationTest {
     void aListenerBeanReceivesTheLifecycleOfARun(@TempDir Path directory) throws java.io.IOException {
         // A real run through the bean the context built, because "the listener was accepted as a bean" and
         // "the listener is called" are different claims and only the second one is useful.
-        java.nio.file.Files.writeString(directory.resolve("probe.json"), """
-                {"schema":"allocation-ir/2.0","rounding_policy":"LARGEST_REMAINDER_IDENTITY",
-                 "name":"probe","precision":2,"dimensions":["plant","account"],
-                 "immutable_dimensions":[],"hierarchies":{},
-                 "datasets":{"amounts":{"amounts":"probe-amounts.csv"},
-                             "drivers":{"drivers":"probe-drivers.csv"}},
-                 "stages":[{"id":"st1","inputs":[{"from":"amounts","share":"1"}],
-                   "source":{"grouping":{"plant":"AS_IS","account":"TOTAL"},"filters":{}},
-                   "target":{"plant":{"mode":"SOURCE"},
-                             "account":{"mode":"INCLUDE","include":["A1"]}},
-                   "conservation_keys":["plant"],
-                   "allocations":[{"id":"r1","share":"1","driver_dataset":"drivers",
-                                   "weight_field":"weight"}]}]}
-                """, java.nio.charset.StandardCharsets.UTF_8);
-        java.nio.file.Files.writeString(directory.resolve("probe-amounts.csv"),
-                "plant,account,amount\nP1,SRC,10.00\n", java.nio.charset.StandardCharsets.UTF_8);
-        java.nio.file.Files.writeString(directory.resolve("probe-drivers.csv"),
-                "plant,account,weight\nP1,A1,1\n", java.nio.charset.StandardCharsets.UTF_8);
+        writeProbeRule(directory);
 
         java.util.List<io.allocation.kernel.service.AllocationListener.Event> events =
                 new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -120,18 +103,90 @@ class AllocationAutoConfigurationTest {
                 .withPropertyValues("allocation.working-directory=" + directory,
                         "allocation.rules-directory=" + directory)
                 .run(context -> {
-                    AllocationTemplate template = context.getBean(AllocationTemplate.class);
-                    AllocationTemplate.SubmitResult submitted = template.submit(
-                            io.allocation.kernel.service.RunCommand.builder()
-                                    .ruleCode("probe")
-                                    .source(new io.allocation.kernel.service.AmountSource.Csv(directory))
-                                    .build());
-                    template.await(submitted.runId(), java.time.Duration.ofSeconds(10));
+                    runProbe(context.getBean(AllocationTemplate.class), directory);
 
                     assertEquals(java.util.List.of("Submitted", "Started", "Published"),
                             events.stream().map(e -> e.getClass().getSimpleName()).toList());
                 });
     }
+
+    @Test
+    void metricsCountARunThatTheEngineActuallyRan(@TempDir Path directory) throws java.io.IOException {
+        writeProbeRule(directory);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+
+        runner.withConfiguration(AutoConfigurations.of(AllocationMetricsAutoConfiguration.class))
+                .withBean(io.micrometer.core.instrument.MeterRegistry.class, () -> registry)
+                .withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory)
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertNotNull(context.getBean(AllocationMetrics.class));
+
+                    runProbe(context.getBean(AllocationTemplate.class), directory);
+
+                    assertEquals(1.0, registry.get("allocation.run.submitted").tag("rule", "probe")
+                            .counter().count());
+                    assertEquals(1.0, registry.get("allocation.run.finished")
+                            .tag("outcome", "published").counter().count());
+                    assertEquals(1.0, registry.get("allocation.run.pools").summary().totalAmount(),
+                            "one pool, one pool in the summary");
+                    assertEquals(0.0, registry.get("allocation.run.in.flight").gauge().value());
+                });
+    }
+
+    @Test
+    void theHostsOwnListenerAndTheMetricsBothGetEveryEvent(@TempDir Path directory)
+            throws java.io.IOException {
+        // The regression this covers: a host listener plus the starter's metrics listener is two beans,
+        // and a template that asked the context for "the" listener would refuse to start at all.
+        writeProbeRule(directory);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        java.util.List<io.allocation.kernel.service.AllocationListener.Event> hostEvents =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        runner.withConfiguration(AutoConfigurations.of(AllocationMetricsAutoConfiguration.class))
+                .withBean(io.micrometer.core.instrument.MeterRegistry.class, () -> registry)
+                .withBean(io.allocation.kernel.service.AllocationListener.class, () -> hostEvents::add)
+                .withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory)
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    runProbe(context.getBean(AllocationTemplate.class), directory);
+
+                    assertEquals(3, hostEvents.size(), "the host still sees the whole lifecycle");
+                    assertEquals(1.0, registry.get("allocation.run.started").counter().count());
+                });
+    }
+
+    @Test
+    void withoutAMeterRegistryThereAreNoMetricBeans(@TempDir Path directory) {
+        // No actuator, no micrometer registry: the bean exists but is the shared no-op, which the composed
+        // listener drops, so the engine keeps its identity fast path and nothing is counted.
+        runner.withConfiguration(AutoConfigurations.of(AllocationMetricsAutoConfiguration.class))
+                .withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory)
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertEquals(0, context.getBeansOfType(AllocationMetrics.class).size());
+                    assertEquals(io.allocation.kernel.service.AllocationListener.noop(),
+                            context.getBean("allocationMetrics"));
+                });
+    }
+
+    @Test
+    void metricsCanBeTurnedOffEvenWithARegistryPresent(@TempDir Path directory) {
+        runner.withConfiguration(AutoConfigurations.of(AllocationMetricsAutoConfiguration.class))
+                .withBean(io.micrometer.core.instrument.MeterRegistry.class,
+                        io.micrometer.core.instrument.simple.SimpleMeterRegistry::new)
+                .withPropertyValues("allocation.working-directory=" + directory,
+                        "allocation.rules-directory=" + directory,
+                        "allocation.metrics.enabled=false")
+                .run(context -> assertEquals(0, context.getBeansOfType(AllocationMetrics.class).size()));
+    }
+
 
     @Test
     void theWebLayerIsRegisteredInAServletApplication(@TempDir Path directory) {
@@ -193,6 +248,37 @@ class AllocationAutoConfigurationTest {
                     assertEquals(io.allocation.kernel.service.RunRepository.Status.RUNNING,
                             repository.find("01STRANDED").orElseThrow().status());
                 });
+    }
+
+    /** One rule, one pool, one target: the smallest run that publishes. */
+    private static void writeProbeRule(Path directory) throws java.io.IOException {
+        java.nio.file.Files.writeString(directory.resolve("probe.json"), """
+                {"schema":"allocation-ir/2.0","rounding_policy":"LARGEST_REMAINDER_IDENTITY",
+                 "name":"probe","precision":2,"dimensions":["plant","account"],
+                 "immutable_dimensions":[],"hierarchies":{},
+                 "datasets":{"amounts":{"amounts":"probe-amounts.csv"},
+                             "drivers":{"drivers":"probe-drivers.csv"}},
+                 "stages":[{"id":"st1","inputs":[{"from":"amounts","share":"1"}],
+                   "source":{"grouping":{"plant":"AS_IS","account":"TOTAL"},"filters":{}},
+                   "target":{"plant":{"mode":"SOURCE"},
+                             "account":{"mode":"INCLUDE","include":["A1"]}},
+                   "conservation_keys":["plant"],
+                   "allocations":[{"id":"r1","share":"1","driver_dataset":"drivers",
+                                   "weight_field":"weight"}]}]}
+                """, java.nio.charset.StandardCharsets.UTF_8);
+        java.nio.file.Files.writeString(directory.resolve("probe-amounts.csv"),
+                "plant,account,amount\nP1,SRC,10.00\n", java.nio.charset.StandardCharsets.UTF_8);
+        java.nio.file.Files.writeString(directory.resolve("probe-drivers.csv"),
+                "plant,account,weight\nP1,A1,1\n", java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static void runProbe(AllocationTemplate template, Path directory) {
+        AllocationTemplate.SubmitResult submitted = template.submit(
+                io.allocation.kernel.service.RunCommand.builder()
+                        .ruleCode("probe")
+                        .source(new io.allocation.kernel.service.AmountSource.Csv(directory))
+                        .build());
+        template.await(submitted.runId(), java.time.Duration.ofSeconds(10));
     }
 
     /** Minimal replacement, used only to prove the conditional backs off. */

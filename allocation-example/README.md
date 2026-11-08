@@ -77,6 +77,21 @@ curl -s -X POST localhost:8080/allocation/runs -H 'Content-Type: application/jso
 The full contract, including the error-code table, is [`docs/API.md`](../docs/API.md). Money crosses the
 wire as a decimal string and never as a floating-point number.
 
+Actuator is on this module's classpath, so the run meters are already being published:
+
+```bash
+curl -s localhost:8080/actuator/metrics/allocation.run.finished
+# {"name":"allocation.run.finished","measurements":[{"statistic":"COUNT","value":1.0}],
+#  "availableTags":[{"tag":"outcome","values":["cancelled","published","failed"]}]}
+
+curl -s 'localhost:8080/actuator/metrics/allocation.run.finished?tag=outcome:published'
+curl -s localhost:8080/actuator/metrics/allocation.run.duration
+```
+
+Nothing was configured for that. The meters come from the shared `AllocationListener` the starter composes
+into the engine, so a host that already has actuator gets them for free and a host that does not has no
+metric beans at all ([`docs/API.md`](../docs/API.md) §5.1).
+
 ## Why this module exists
 
 It is three claims made executable.
@@ -104,5 +119,7 @@ Turn the startup demo off with `example.demo=false`; point the reference elsewhe
 mvn -pl allocation-example test
 ```
 
-Three tests, on a real port: the demo run publishes with the sample totals, the frozen reference still
-matches, and resubmitting the same idempotency key returns the same run instead of computing it twice.
+Four tests, on a real port: the demo run publishes with the sample totals, the frozen reference still
+matches, resubmitting the same idempotency key returns the same run instead of computing it twice, and the
+run appears in `/actuator/metrics` — which is the only way to prove the metrics auto-configuration found a
+registry in an application that never mentioned metrics.

@@ -63,17 +63,20 @@ public class AllocationAutoConfiguration {
      * template is returned: a decorator that checks a permit-all rule is a stack frame on the hot path
      * bought with nothing.
      *
-     * <p>A listener is passed only when a host declared one, for the same reason.
+     * <p>Listeners are composed rather than required to be unique. There is one reason: the starter may
+     * install its own (metrics), and a host that also declares one would otherwise fail to start with
+     * "expected single matching bean" — a wiring error caused by a feature the host never asked for. With
+     * no listener at all the no-op instance is passed, so the engine keeps its identity fast path.
      */
     @Bean
     @ConditionalOnMissingBean
     public AllocationTemplate allocationTemplate(RunRepository repository, RuleResolver rules,
                                                  AllocationProperties properties,
                                                  ObjectProvider<AllocationAuthorizer> authorizer,
-                                                 ObjectProvider<AllocationListener> listener) {
+                                                 ObjectProvider<AllocationListener> listeners) {
         AllocationTemplate engine = new DefaultAllocationTemplate(repository, rules,
                 properties.getWorkingDirectory(), properties.getQueueCapacity(),
-                listener.getIfAvailable(AllocationListener::noop));
+                AllocationListener.allOf(listeners.orderedStream().toList()));
         AllocationAuthorizer guard = authorizer.getIfAvailable();
         return guard == null ? engine : new AuthorizingAllocationTemplate(engine, guard);
     }

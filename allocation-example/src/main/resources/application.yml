@@ -7,6 +7,14 @@ allocation:
 server:
   port: 8080
 
+# The metrics endpoint, so `curl localhost:8080/actuator/metrics/allocation.run.finished` works. The run
+# meters themselves need no configuration: they appear because actuator provides a MeterRegistry.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+
 logging:
   level:
     io.allocation: INFO

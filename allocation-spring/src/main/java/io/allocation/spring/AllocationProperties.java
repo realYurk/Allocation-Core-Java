@@ -61,6 +61,9 @@ public class AllocationProperties {
      */
     private boolean recoverInterruptedRuns = false;
 
+    /** Metrics settings, under {@code allocation.metrics}. */
+    private final Metrics metrics = new Metrics();
+
     public Path getWorkingDirectory() {
         return workingDirectory;
     }
@@ -107,5 +110,32 @@ public class AllocationProperties {
 
     public void setRecoverInterruptedRuns(boolean recoverInterruptedRuns) {
         this.recoverInterruptedRuns = recoverInterruptedRuns;
+    }
+
+    public Metrics getMetrics() {
+        return metrics;
+    }
+
+    /**
+     * Whether to publish run lifecycle metrics to the {@code MeterRegistry} the application already has.
+     *
+     * <p>On by default, because the meters are a handful of counters and two timers updated once per run,
+     * not once per row — the cost is invisible next to the run itself. Off is for the deployment that
+     * counts nothing else and does not want a series with no reader.
+     *
+     * <p>Nothing happens without a {@code MeterRegistry} bean, so this only matters to an application
+     * that has actuator (or micrometer directly) on the classpath.
+     */
+    public static class Metrics {
+
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
     }
 }

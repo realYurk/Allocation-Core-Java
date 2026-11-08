@@ -16,7 +16,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -158,6 +158,59 @@ class AllocationListenerTest {
         } finally {
             template.close();
         }
+    }
+
+    @Test
+    void severalListenersEachSeeEveryEvent() {
+        List<AllocationListener.Event> second = new CopyOnWriteArrayList<>();
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        DefaultAllocationTemplate template = template(repository,
+                AllocationListener.allOf(List.of(events::add, second::add)));
+        try {
+            AllocationTemplate.SubmitResult submitted = submit(template, null);
+            template.await(submitted.runId(), Duration.ofSeconds(10));
+
+            assertEquals(List.of("Submitted", "Started", "Published"), names());
+            assertEquals(names(), second.stream().map(e -> e.getClass().getSimpleName()).toList());
+        } finally {
+            template.close();
+        }
+    }
+
+    @Test
+    void aFailingListenerDoesNotSilenceTheOnesAfterIt() {
+        // The reason allOf exists instead of a lambda that calls each in turn: a naive fan-out stops at the
+        // first exception, so one broken audit hook silently takes the metrics down with it.
+        List<AllocationListener.Event> survivor = new CopyOnWriteArrayList<>();
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        DefaultAllocationTemplate template = template(repository, AllocationListener.allOf(List.of(
+                event -> {
+                    throw new IllegalStateException("audit table is gone");
+                },
+                survivor::add)));
+        try {
+            AllocationTemplate.SubmitResult submitted = submit(template, null);
+            template.await(submitted.runId(), Duration.ofSeconds(10));
+
+            assertEquals(List.of("Submitted", "Started", "Published"),
+                    survivor.stream().map(e -> e.getClass().getSimpleName()).toList());
+        } finally {
+            template.close();
+        }
+    }
+
+    @Test
+    void allOfCollapsesToTheNoopInstanceWhenNobodyIsListening() {
+        // Identity matters: the template compares against the shared no-op to skip the notify path
+        // entirely, so a composed listener must be that exact instance rather than a do-nothing wrapper.
+        assertSame(AllocationListener.noop(), AllocationListener.allOf(List.of()));
+        assertSame(AllocationListener.noop(),
+                AllocationListener.allOf(List.of(AllocationListener.noop(), AllocationListener.noop())));
+
+        AllocationListener one = event -> {
+        };
+        assertSame(one, AllocationListener.allOf(List.of(one)),
+                "a single listener must not be wrapped in a composite for nothing");
     }
 
     // ------------------------------------------------------------------ helpers

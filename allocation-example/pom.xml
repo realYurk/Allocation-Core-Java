@@ -26,6 +26,16 @@
       <artifactId>allocation-spring</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!--
+      Not required by the engine, and that is the point of having it here: the example is also the proof
+      that the metrics auto-configuration finds a MeterRegistry in an ordinary Boot application and that
+      the meters reach /actuator/metrics. A host that does not add actuator simply gets no metrics bean.
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+      <version>${spring-boot.version}</version>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

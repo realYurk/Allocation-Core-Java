@@ -22,6 +22,13 @@
     <compiler.version>3.13.0</compiler.version>
     <jar.version>3.4.1</jar.version>
     <spring-boot.version>3.2.3</spring-boot.version>
+    <!--
+      Pinned by hand: this project does not import the Spring Boot BOM (the kernel has no Spring
+      dependency at all, and a BOM import would make every module's dependency graph Boot's problem).
+      1.12.3 is the version Boot 3.2.3 manages, so a host that has actuator already has this exact jar and
+      nothing is duplicated.
+    -->
+    <micrometer.version>1.12.3</micrometer.version>
     <jmh.version>1.37</jmh.version>
   </properties>
 

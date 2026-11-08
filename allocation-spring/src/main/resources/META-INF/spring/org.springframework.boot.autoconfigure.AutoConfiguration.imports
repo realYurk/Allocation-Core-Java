@@ -1,2 +1,3 @@
 io.allocation.spring.AllocationAutoConfiguration
+io.allocation.spring.AllocationMetricsAutoConfiguration
 io.allocation.spring.AllocationWebConfiguration
