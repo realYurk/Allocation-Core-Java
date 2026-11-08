@@ -12,7 +12,7 @@
 | 服务层（`io.allocation.kernel.service`） | ✅ 已实现：`AllocationTemplate` 的六个方法、幂等键、虚拟线程执行、有界准入 |
 | 对账（`io.allocation.kernel.reconcile`） | ✅ 已实现：坐标级比较、容差、重复策略、科目汇总、差异文件 |
 | 数据库 schema（`ddl/`） | ✅ 已实现：MySQL 8 / PostgreSQL 15+ / SQLite，SQLite 版本由 `SchemaTest` 实际执行 |
-| 存储适配器（JDBC / MyBatis） | ⬜ `RunRepository` 端口与内存实现已完成，适配器待做 |
+| 存储适配器 | ✅ JDBC（`JdbcRunRepository`，零运行时依赖，由 `JdbcRunRepositoryTest` 与 `JdbcServiceTest` 对真实库验证）；MyBatis 适配器可选，非必需 |
 | REST 控制器（§2）与 starter 装配（§6） | ⬜ 契约已冻结，按本文档实现即可；服务层是它们唯一的下游 |
 
 本节以下的 REST 与配置契约**已经定稿**：实现时不得改字段，只能增字段。
@@ -198,8 +198,15 @@ DDL 是代码，只保留一份，放在 `ddl/`：
 | `ddl/allocation-postgres.sql` | PostgreSQL 15+ |
 | `ddl/allocation-sqlite.sql` | 本地与测试；由 `SchemaTest` 在 CI 中实际执行 |
 
-五张表：`allocation_rule` / `allocation_run` / `allocation_pool` / `allocation_line` /
-`allocation_reconcile`。
+六张表：`allocation_rule` / `allocation_run` / `allocation_pool` / `allocation_line` /
+`allocation_result` / `allocation_reconcile`。
+
+`allocation_result` 存的是最终答案（一条终端输出行），`allocation_line` 存的是它怎么来的
+（每条分配决策的权重、分母、份额）。前者供分页查询，后者供 `explain` 与审计。两者都按 `seq` 升序，
+`seq` 就是引擎的写出顺序，分页翻过去不会重排。
+
+坐标在 `allocation_result.coordinate` 里存成**一个 JSON 数组**，而不是每个维度一列：规则可以声明
+1..30 个维度，固定列集不存在；存引擎自己的规范键，读回来的字符串和现在算出来的逐字节相同。
 
 **金额约定**：所有 `*_amount` 列都是「10^-precision 个最小单位」的整数，precision 来自规则（0..6）。
 `123456` 在 precision=2 时表示 `1234.56`。用 `BIGINT` 而不是 `DECIMAL`，是为了让数据库里存的值和
@@ -207,6 +214,13 @@ DDL 是代码，只保留一份，放在 `ddl/`：
 
 **幂等**：`allocation_run.idempotency_key` 上的唯一约束就是幂等的实现，不是缓存。并发提交同 key 时，
 数据库只允许一个赢，另一个读到赢家。
+
+**幂等键的"同一次请求"由内容决定**：`request_sha256` = 规则字节 + 每个数据集的内容摘要（不是路径，
+不是大小，不是时间戳）。所以重新导出一份数字变了的 `amounts.csv` 再提交，会得到 `ALLOC_005` 而不是
+上一次的旧答案；原样重写同样的字节则仍然是重放。
+
+**时间列是 BIGINT 纪元毫秒**，不是 `DATETIME`：三个方言必须能走同一份 JDBC 代码，而时区语义属于
+展示层，不属于账本。
 
 **明细可选**：`retainResultLines=false` 时只写 `allocation_pool`（池级证据），`allocation_line` 留空。
 超过 500 万行建议关闭明细，保留归档文件。

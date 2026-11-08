@@ -1,6 +1,7 @@
 package io.allocation.kernel.coord;
 
 import io.allocation.kernel.json.Json;
+import io.allocation.kernel.json.JsonValue;
 
 import java.util.List;
 
@@ -86,6 +87,30 @@ public final class Coord implements Comparable<Coord> {
             key = cached;
         }
         return cached;
+    }
+
+    /**
+     * Rebuilds a coordinate from its canonical key.
+     *
+     * <p>Needed by any store that keeps coordinates as one dimension-agnostic column rather than one
+     * column per dimension: a rule may declare between one and thirty dimensions, so a fixed column set
+     * is not available. The key is the same JSON array the engine already groups and sorts by, which
+     * makes it the honest thing to persist.
+     *
+     * @throws IllegalArgumentException when the text is not a JSON array of strings
+     */
+    public static Coord parse(String key) {
+        if (!(Json.parse(key) instanceof JsonValue.Arr array)) {
+            throw new IllegalArgumentException("coordinate key is not a JSON array: " + key);
+        }
+        String[] members = new String[array.size()];
+        for (int i = 0; i < members.length; i++) {
+            if (!(array.at(i) instanceof JsonValue.Str text)) {
+                throw new IllegalArgumentException("coordinate key member " + i + " is not a string");
+            }
+            members[i] = text.value();
+        }
+        return new Coord(members);
     }
 
     /** Compares by canonical key in UTF-8 byte order, which is the reference ordering. */

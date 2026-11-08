@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS allocation_line (
 
 CREATE INDEX IF NOT EXISTS idx_line_target ON allocation_line (run_id, target_key);
 
+-- Terminal output rows; see the MySQL variant for why coordinate is one JSON key.
+CREATE TABLE IF NOT EXISTS allocation_result (
+  run_id     TEXT    NOT NULL REFERENCES allocation_run (run_id) ON DELETE CASCADE,
+  seq        INTEGER NOT NULL,
+  stage_id   TEXT    NOT NULL,
+  row_id     TEXT    NOT NULL,
+  coordinate TEXT    NOT NULL,
+  amount     INTEGER NOT NULL,
+  PRIMARY KEY (run_id, seq)
+);
+
 CREATE TABLE IF NOT EXISTS allocation_reconcile (
   run_id      TEXT    NOT NULL REFERENCES allocation_run (run_id) ON DELETE CASCADE,
   ref_sha256  TEXT    NOT NULL,

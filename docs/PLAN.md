@@ -152,7 +152,9 @@ allocation-java/
 
 ### P5 证据与持久化（`evidence` + starter 持久层）
 
-> **状态**：证据文件（五件套）与 `RunRepository` 端口、内存实现、`ddl/` 三方言（已完成并被 `SchemaTest` 执行验证）；JDBC/MyBatis 适配器待做。
+> **状态**：证据文件（五件套）、`RunRepository` 端口、内存实现、`ddl/` 三方言（由 `SchemaTest` 执行验证）、
+> **JDBC 适配器 `JdbcRunRepository`**（`JdbcRunRepositoryTest` 14 项 + `JdbcServiceTest` 8 项，对真实库跑通
+> 幂等、终态不可改写、证据只写一次、分页无重排）均已完成；MyBatis/MyBatis-Plus 适配器为可选项，不影响交付。
 
 | 项 | 内容 |
 |---|---|

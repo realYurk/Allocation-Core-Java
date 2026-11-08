@@ -5,8 +5,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -30,8 +28,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SchemaTest {
 
-    private static final Path DDL = Path.of("..", "ddl", "allocation-sqlite.sql");
-
     @TempDir
     Path directory;
 
@@ -39,10 +35,9 @@ class SchemaTest {
 
     @BeforeEach
     void loadSchema() throws IOException, SQLException {
-        assertTrue(Files.isRegularFile(DDL), "missing " + DDL.toAbsolutePath());
         url = "jdbc:sqlite:" + directory.resolve("allocation.db").toAbsolutePath();
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            for (String sql : statements(Files.readString(DDL, StandardCharsets.UTF_8))) {
+            for (String sql : SchemaFixture.statements(SchemaFixture.read())) {
                 statement.execute(sql);
             }
         }
@@ -56,26 +51,8 @@ class SchemaTest {
         return connection;
     }
 
-    /** Strips comment lines and splits on semicolons; the DDL contains no quoted semicolons. */
-    private static List<String> statements(String text) {
-        List<String> out = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        for (String line : text.split("\n")) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("--") || trimmed.isEmpty()) {
-                continue;
-            }
-            current.append(line).append('\n');
-            if (trimmed.endsWith(";")) {
-                out.add(current.toString());
-                current.setLength(0);
-            }
-        }
-        return out;
-    }
-
     @Test
-    void createsTheFiveTables() throws SQLException {
+    void createsEveryTableTheServiceWritesTo() throws SQLException {
         List<String> tables = new ArrayList<>();
         try (Connection connection = connect();
              Statement statement = connection.createStatement();
@@ -87,7 +64,7 @@ class SchemaTest {
         }
 
         assertEquals(List.of("allocation_line", "allocation_pool", "allocation_reconcile",
-                "allocation_rule", "allocation_run"), tables);
+                "allocation_result", "allocation_rule", "allocation_run"), tables);
     }
 
     @Test

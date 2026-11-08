@@ -34,26 +34,30 @@ public interface RunRepository {
      * One run.
      *
      * @param requestSha256 digest of rule plus input, used to detect an idempotency conflict
+     * @param precision     decimal places the amounts in this run are scaled to; an amount without it
+     *                      is an integer of unknown magnitude, so it is stored with the run rather than
+     *                      re-derived from whatever rule happens to be current when someone reads it
      */
     record RunRecord(String runId, String ruleCode, String ruleSha256, String idempotencyKey,
-                     String requestSha256, Status status, long inputAmount, long outputAmount,
+                     String requestSha256, int precision, Status status, long inputAmount, long outputAmount,
                      int poolCount, long rowCount, String failureCode, String failureMessage,
                      long startedAtEpochMs, Long finishedAtEpochMs) {
 
         public RunRecord withStatus(Status next) {
-            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, next,
-                    inputAmount, outputAmount, poolCount, rowCount, failureCode, failureMessage,
+            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, precision,
+                    next, inputAmount, outputAmount, poolCount, rowCount, failureCode, failureMessage,
                     startedAtEpochMs, finishedAtEpochMs);
         }
 
         public RunRecord published(long input, long output, int pools, long rows, long finishedAt) {
-            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, Status.PUBLISHED,
-                    input, output, pools, rows, null, null, startedAtEpochMs, finishedAt);
+            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, precision,
+                    Status.PUBLISHED, input, output, pools, rows, null, null, startedAtEpochMs, finishedAt);
         }
 
         public RunRecord failed(String code, String message, long finishedAt) {
-            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, Status.FAILED,
-                    inputAmount, outputAmount, poolCount, rowCount, code, message, startedAtEpochMs, finishedAt);
+            return new RunRecord(runId, ruleCode, ruleSha256, idempotencyKey, requestSha256, precision,
+                    Status.FAILED, inputAmount, outputAmount, poolCount, rowCount, code, message,
+                    startedAtEpochMs, finishedAt);
         }
     }
 

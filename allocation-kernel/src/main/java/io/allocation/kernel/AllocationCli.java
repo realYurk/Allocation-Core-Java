@@ -1,5 +1,6 @@
 package io.allocation.kernel;
 
+
 import io.allocation.kernel.exec.AllocationRunner;
 import io.allocation.kernel.exec.Executor;
 import io.allocation.kernel.exec.RunSummary;
@@ -39,7 +40,7 @@ import java.util.Map;
 public final class AllocationCli {
 
     /** Version reported by {@code version} and recorded in run summaries. */
-    public static final String VERSION = "1.0.0";
+    public static final String VERSION = Engine.VERSION;
 
     /** Exit status used by {@code reconcile} when the two sides disagree. */
     public static final int EXIT_DIFFERENCES = 3;

@@ -16,6 +16,7 @@ import io.allocation.kernel.plan.Plan;
 import io.allocation.kernel.plan.Planner;
 import io.allocation.kernel.reconcile.Reconciler;
 import io.allocation.kernel.reconcile.ReferenceCsv;
+import io.allocation.kernel.spec.AllocationRule;
 import io.allocation.kernel.spec.AllocationSpec;
 import io.allocation.kernel.spec.SpecCodec;
 import io.allocation.kernel.spec.StageSpec;
@@ -27,11 +28,14 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -52,6 +56,9 @@ import java.util.concurrent.Semaphore;
  * and executor callbacks in M4; neither changes the contract above.
  */
 public final class DefaultAllocationTemplate implements AllocationTemplate, AutoCloseable {
+
+    /** JDK logger, so the kernel keeps its zero-dependency promise and a host can still see failures. */
+    private static final System.Logger LOG = System.getLogger(DefaultAllocationTemplate.class.getName());
 
     private final RunRepository repository;
     private final RuleResolver rules;
@@ -114,7 +121,11 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         AllocationSpec spec = SpecCodec.parse(rule.json());
         Planner.compile(spec);
 
-        String requestDigest = requestDigest(rule, command.source());
+        // Built once: the digest needs the datasets' contents, and the run needs the same input. Doing
+        // this per submission also means a file that changes between the digest and the run is not a
+        // possibility, because there is only the one read of each dataset.
+        AllocationInput input = inputFor(rule, spec, command.source());
+        String requestDigest = requestDigest(rule, spec, command.source(), input);
         String key = command.idempotencyKey();
         if (key != null) {
             Optional<RunRepository.RunRecord> existing = repository.findByIdempotencyKey(key);
@@ -131,7 +142,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             throw new AllocationException(ErrorCode.REQUEST_TOO_LARGE, "allocation queue is full");
         }
         RunRepository.RunRecord pending = new RunRepository.RunRecord(RunIds.next(), rule.code(), rule.sha256(),
-                key, requestDigest, RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null,
+                key, requestDigest, spec.precision(), RunRepository.Status.PENDING, 0L, 0L, 0, 0L, null, null,
                 System.currentTimeMillis(), null);
         try {
             repository.insert(pending);
@@ -148,7 +159,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         }
         workers.execute(() -> {
             try {
-                executeRun(pending, rule, spec, command);
+                executeRun(pending, rule, spec, command, input);
             } finally {
                 admission.release();
             }
@@ -272,12 +283,12 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
     // ---------------------------------------------------------------- execution
 
     private void executeRun(RunRepository.RunRecord pending, RuleResolver.RuleDocument rule,
-                            AllocationSpec spec, RunCommand command) {
+                            AllocationSpec spec, RunCommand command, AllocationInput data) {
         repository.update(pending.withStatus(RunRepository.Status.RUNNING));
         try {
             Plan plan = Planner.compile(spec);
             MemorySink sink = MemorySink.full();
-            Executor.execute(plan, rule.sha256(), inputFor(rule, spec, command.source()), sink,
+            Executor.execute(plan, rule.sha256(), data, sink,
                     new Executor.Options(command.options().workers(), command.options().failOnMissingTarget()));
 
             Map<String, Integer> targetsPerPool = new HashMap<>();
@@ -303,10 +314,27 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             repository.update(pending.published(input, output, pools.size(), sink.results().size(),
                     System.currentTimeMillis()));
         } catch (AllocationException e) {
-            repository.update(pending.failed(e.code().code(), truncate(e.getMessage()), System.currentTimeMillis()));
+            recordFailure(pending, e.code().code(), truncate(e.getMessage()), e);
         } catch (RuntimeException e) {
-            repository.update(pending.failed(ErrorCode.INTERNAL.code(), truncate(String.valueOf(e)),
-                    System.currentTimeMillis()));
+            recordFailure(pending, ErrorCode.INTERNAL.code(), truncate(String.valueOf(e)), e);
+        }
+    }
+
+    /**
+     * Marks the run failed, without letting a broken repository hide the reason the run failed.
+     *
+     * <p>If the database is unavailable at this point the update throws, and the original cause would be
+     * lost to an uncaught exception on a virtual thread that nothing is watching. Recording that the
+     * record could not be recorded is the only thing left to do, and it goes to the JDK logger because
+     * the kernel carries no logging dependency.
+     */
+    private void recordFailure(RunRepository.RunRecord pending, String code, String message, RuntimeException cause) {
+        try {
+            repository.update(pending.failed(code, message, System.currentTimeMillis()));
+        } catch (RuntimeException e) {
+            LOG.log(System.Logger.Level.ERROR,
+                    "run " + pending.runId() + " failed with " + code + " and could not be marked failed: " + e,
+                    cause);
         }
     }
 
@@ -457,17 +485,69 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         return record;
     }
 
-    private String requestDigest(RuleResolver.RuleDocument rule, AmountSource source) {
-        String sourceDigest = switch (source) {
-            case AmountSource.Csv csv -> "csv:" + csv.baseDirectory().toAbsolutePath();
-            case AmountSource.InMemory memory -> {
-                StringBuilder sb = new StringBuilder("memory:");
-                for (AmountRow row : memory.rows()) {
-                    sb.append(row.coord()).append('=').append(row.amount().format()).append(';');
-                }
-                yield sb.toString();
+    /**
+     * Identity of a submission: rule bytes plus the contents of every dataset it reads.
+     *
+     * <p>An earlier version hashed the source <em>directory</em> for file input. That was wrong in a way
+     * no test caught until one did: re-exporting {@code amounts.csv} into the same directory produced the
+     * same digest, so resubmitting with the same idempotency key returned the previous run's answer for
+     * different numbers. Idempotency is a promise about the request, and a request is its data.
+     *
+     * <p>Amount rows supplied in memory displace their dataset, so their values are hashed instead of the
+     * file's. Driver datasets always come from files, even for a preview, because a preview asks "what
+     * would this rule do with these amounts" rather than "with made-up weights".
+     */
+    private String requestDigest(RuleResolver.RuleDocument rule, AllocationSpec spec, AmountSource source,
+                                 AllocationInput input) {
+        StringBuilder sb = new StringBuilder(256);
+        sb.append("rule:").append(rule.sha256());
+
+        AmountSource.InMemory memory = source instanceof AmountSource.InMemory inMemory ? inMemory : null;
+        List<String> amountNames = new ArrayList<>(spec.amountDatasets().keySet());
+        Collections.sort(amountNames);
+        for (String dataset : amountNames) {
+            sb.append("\namounts:").append(dataset).append('=');
+            if (memory != null && spec.amountDatasets().size() == 1) {
+                // The single amount dataset is the one being replaced by the caller's rows.
+                sb.append(rowsDigest(memory.rows()));
+            } else {
+                sb.append(Objects.toString(input.fingerprint(dataset, null), "absent"));
             }
-        };
-        return SpecCodec.sha256Hex(rule.sha256() + '|' + sourceDigest);
+        }
+
+        TreeSet<String> references = new TreeSet<>();
+        for (StageSpec stage : spec.stages()) {
+            for (AllocationRule allocation : stage.allocations()) {
+                references.add(allocation.driverDataset() + '\u0000' + allocation.weightField());
+            }
+        }
+        for (String reference : references) {
+            int split = reference.indexOf('\u0000');
+            String dataset = reference.substring(0, split);
+            String field = reference.substring(split + 1);
+            sb.append("\ndrivers:").append(dataset).append('.').append(field).append('=')
+                    .append(Objects.toString(input.fingerprint(dataset, field), "absent"));
+        }
+        return SpecCodec.sha256Hex(sb.toString());
+    }
+
+    /**
+     * Digest of caller-supplied rows, in the order given.
+     *
+     * <p>Keys are sorted because {@link AmountRow} copies its coordinate into an immutable map whose
+     * iteration order is unspecified; hashing that order would make the digest differ between runs of the
+     * same request.
+     */
+    private static String rowsDigest(List<AmountRow> rows) {
+        StringBuilder sb = new StringBuilder(rows.size() * 32);
+        for (AmountRow row : rows) {
+            List<String> keys = new ArrayList<>(row.coord().keySet());
+            Collections.sort(keys);
+            for (String key : keys) {
+                sb.append(key).append('=').append(row.coord().get(key)).append(',');
+            }
+            sb.append('=').append(row.amount().format()).append('\n');
+        }
+        return SpecCodec.sha256Hex(sb.toString());
     }
 }

@@ -32,8 +32,8 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   engine_version  VARCHAR(32)  NOT NULL,
   failure_code    VARCHAR(16),
   failure_message VARCHAR(512),
-  started_at      TIMESTAMPTZ  NOT NULL,
-  finished_at     TIMESTAMPTZ,
+  started_at      BIGINT       NOT NULL,
+  finished_at     BIGINT,
   create_time     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
@@ -67,6 +67,17 @@ CREATE TABLE IF NOT EXISTS allocation_line (
 );
 
 CREATE INDEX IF NOT EXISTS idx_line_target ON allocation_line (run_id, target_key);
+
+-- Terminal output rows; see the MySQL variant for why coordinate is one JSON key.
+CREATE TABLE IF NOT EXISTS allocation_result (
+  run_id     VARCHAR(32)  NOT NULL REFERENCES allocation_run (run_id) ON DELETE CASCADE,
+  seq        BIGINT       NOT NULL,
+  stage_id   VARCHAR(64)  NOT NULL,
+  row_id     VARCHAR(128) NOT NULL,
+  coordinate TEXT         NOT NULL,
+  amount     BIGINT       NOT NULL,
+  PRIMARY KEY (run_id, seq)
+);
 
 CREATE TABLE IF NOT EXISTS allocation_reconcile (
   run_id      VARCHAR(32) NOT NULL REFERENCES allocation_run (run_id) ON DELETE CASCADE,

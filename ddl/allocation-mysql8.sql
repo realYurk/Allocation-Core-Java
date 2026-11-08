@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS allocation_run (
   engine_version  VARCHAR(32)  NOT NULL,
   failure_code    VARCHAR(16)      NULL,
   failure_message VARCHAR(512)     NULL,
-  started_at      DATETIME(3)  NOT NULL,
-  finished_at     DATETIME(3)      NULL,
+  started_at      BIGINT       NOT NULL,
+  finished_at     BIGINT           NULL,
   create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (run_id),
   UNIQUE KEY uk_idem (idempotency_key),
@@ -72,6 +72,22 @@ CREATE TABLE IF NOT EXISTS allocation_line (
   PRIMARY KEY (run_id, seq),
   KEY idx_line_target (run_id, target_key(255)),
   CONSTRAINT fk_line_run FOREIGN KEY (run_id) REFERENCES allocation_run (run_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Terminal output rows. `coordinate` is the canonical JSON array of members, not one column per
+-- dimension: a rule declares between 1 and 30 dimensions, so a fixed column set cannot exist. Keeping
+-- the engine's own key means a stored coordinate compares byte for byte with a computed one.
+-- `seq` preserves emission order, which is what pagination has to page over; without it a page boundary
+-- falls wherever the optimiser feels like putting it.
+CREATE TABLE IF NOT EXISTS allocation_result (
+  run_id     VARCHAR(32)   NOT NULL,
+  seq        BIGINT        NOT NULL,
+  stage_id   VARCHAR(64)   NOT NULL,
+  row_id     VARCHAR(128)  NOT NULL,
+  coordinate VARCHAR(1024) NOT NULL,
+  amount     BIGINT        NOT NULL,
+  PRIMARY KEY (run_id, seq),
+  CONSTRAINT fk_result_run FOREIGN KEY (run_id) REFERENCES allocation_run (run_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS allocation_reconcile (
