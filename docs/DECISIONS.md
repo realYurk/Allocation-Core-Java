@@ -484,9 +484,11 @@ signature"），因为 Spring 按**声明类型**校验销毁方法，而 `Alloc
 推断（按**实际实例类型**找 `close`/`shutdown`），并让装饰器实现 `AutoCloseable` 转发给被装饰者——否则包一层之后
 引擎的线程池永远不会被关，测试里看不出来，生产里表现为"停不下来"。
 
-**已知代价**：`TenantProvider` / `DataScopeProvider` 仍未实现。多租户不是加一个 SPI 就完事：`allocation_run` 要有
+**已知代价（当时）**：`TenantProvider` / `DataScopeProvider` 仍未实现。多租户不是加一个 SPI 就完事：`allocation_run` 要有
 `tenant_id`，唯一键要变成 `(tenant_id, idempotency_key)`，所有查询要带租户条件——那是一次 schema 变更加一次
-仓储重写，值得单独一次提交，而不该混在事件与鉴权里。
+仓储重写，值得单独一次提交，而不该混在事件与鉴权里。**后续**：`TenantProvider` 已实现（D-031）；`DataScopeProvider`
+明确不做——数据权限约束的是"能看到哪些成本中心"，也就是**输入数据**，属于宿主的输入层职责，不是分摊组件的
+扩展点（见 D-031 与 API.md §5.2）。
 
 ---
 

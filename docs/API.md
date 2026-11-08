@@ -288,11 +288,11 @@ DDL 是代码，只保留一份，放在 `ddl/`：
 | `ddl/allocation-postgres.sql` | PostgreSQL 15+ |
 | `ddl/allocation-sqlite.sql` | 本地与测试；由 `SchemaTest` 在 CI 中实际执行 |
 
-**MySQL / PostgreSQL 的语法从未被服务器验证过**，这是本组件当前的已知风险，写在这里而不是藏起来：CI 只能
-执行 SQLite（唯一能嵌进 JVM 的），开发机上也没有 docker / psql / mysql。缓解措施是
-`SchemaConsistencyTest`——它解析三份文件并逐表比较列名与列序，证明三者描述的是**同一个形状**；它没有证明
-的是语法、`LIMIT ? OFFSET ?` 的参数绑定、`JSON` 列与 `AUTO_INCREMENT` 在这两个方言上的具体行为。第一次接真库
-时，把 `SchemaTest` 与 `JdbcServiceTest` 的入口换成一个真实 `DataSource` 重跑一遍，再删掉这段话。
+**MySQL 的语法已在真实服务器上验证过**（`JdbcMySqlTest`，opt-in：`mvn -pl allocation-kernel test
+-Dtest=JdbcMySqlTest -Dmysql.url=...`，CI 无 MySQL 自动跳过）。它跑通了 DDL 建表、幂等、keyset 分页、租户
+隔离、utf8mb4 坐标往返——正是 `SchemaConsistencyTest` 的"逐列比对"永远证明不了的那一层。**PostgreSQL 的
+语法仍未验证**：本机与 CI 都没有 psql，`ddl/allocation-postgres.sql` 至今只被逐列比对过。第一次接真 PG 时，
+照 `JdbcMySqlTest` 加一个 `JdbcPostgresTest` 重跑一遍，再删掉这段话。
 
 四张表：`allocation_run` / `allocation_pool` / `allocation_line` / `allocation_result`。对账结果**不落表**：
 它是 `ReconcileOutcome`（一个计数摘要）和一份 `differences.csv`，因为对账的产物是一份要给人看、要归档的
