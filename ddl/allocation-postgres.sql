@@ -4,18 +4,6 @@
 -- comes from the rule (0..6). A value of 123456 at precision 2 means 1234.56. BIGINT is used rather than
 -- NUMERIC so no implicit re-scaling can round money while moving it.
 
-CREATE TABLE IF NOT EXISTS allocation_rule (
-  rule_code      VARCHAR(64)  PRIMARY KEY,
-  rule_name      VARCHAR(128) NOT NULL,
-  schema_version VARCHAR(32)  NOT NULL,
-  precision      SMALLINT     NOT NULL CHECK (precision BETWEEN 0 AND 6),
-  spec_sha256    CHAR(64)     NOT NULL,
-  spec_json      JSONB        NOT NULL,
-  status         VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
-  create_time    TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_rule_sha ON allocation_rule (spec_sha256);
 
 -- tenant_id is '' for a single-tenant deployment, so the same statements run everywhere and the
 -- composite unique key degenerates into the key on idempotency_key that it always was. The child tables

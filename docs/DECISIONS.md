@@ -920,9 +920,10 @@ run 都要付的钱。用一件罕见事故的信息量，换掉一件常见操�
 
 **没有做的两件事**：
 
-- 没有把 `allocation_rule` 表改造成规则的唯一来源。规则目录是当前的事实来源（`DirectoryRuleResolver`），
-  `allocation_rule` 表一直没有任何代码写它——它和刚删掉的 `allocation_reconcile` 是同一类"纸面表"。这条决策
-  不扩大范围，等有人真正需要"规则也进数据库"时再单独做。
+- 没有把 `allocation_rule` 表改造成规则的唯一来源——它在本条决策之后被**删掉了**（D-037）：规则目录是当前
+  的事实来源（`DirectoryRuleResolver`），`allocation_rule` 表一直没有任何代码写它，和刚删掉的
+  `allocation_reconcile` 是同一类"纸面表"。真要有"规则也进数据库"的那天，会先写一个 DB 背书的
+  `RuleResolver`，再由它带着一张有读写路径的表回来，而不是留一张空表等宿主在上面建报表。
 - 没有给 `result` 加"历史规则不存在就报错的开关"。直接做成无条件验证：一个不验证 digest 的读取路径，就是
   把 D-016（哈希目录不哈希内容）、D-029（幂等键不看内容）同一个 bug 再犯第四次。
 
@@ -955,3 +956,29 @@ afterSeq 行返回 limit 行"——但表述成 keyset，实现才能走索引�
 谁要引入稀疏 seq（比如给 `allocation_line` 用 ULID 排序键），谁就得先回来改这条。
 
 **顺带**：`resultCount` 仍是 `COUNT(*)`，没有被这条影响——它是 O(log N) 的索引计数，不是分页的一部分。
+
+---
+
+## D-037 删掉 allocation_rule——它是第二张没有读写路径的表
+
+**状态**：已接受
+
+**背景**：D-035 删表前后，`allocation_rule` 是同一类东西的最后一个成员。它有三列专门描述规则文档
+（`spec_json` 是 `JSON`/`jsonb` 类型、`spec_sha256`、`precision`），而 D-035 刚刚论证过：把规则存进会被数据库
+重排的 JSON 类型列，会让 digest 失效。更基本的是，**没有任何代码读或写它**——`grep` 全仓库，它只出现在两份
+schema 测试里，断言它"存在"。
+
+一张表的存在有三个来源：有代码写它、有代码读它、或者它在等未来的某件事。`allocation_rule` 属于第三种，而
+第三种恰恰是 D-033 论证过最危险的一类：一张空表会诱使宿主在上面建报表、建代码生成器页面、把它当成"规则的
+官方注册处"，而这些都建立在"引擎会维护它"的隐含假设上——引擎不会。
+
+**决策**：三份 DDL 都删掉 `allocation_rule`（及其索引），schema 测试与一致性测试同步。现在表集合就是引擎
+真正写的那四张：`allocation_run` / `allocation_pool` / `allocation_line` / `allocation_result`。规则的
+唯一事实来源是 `DirectoryRuleResolver` 的目录，规则的不可变历史由 `allocation_run.rule_json`（D-035）承担。
+
+**与 D-033 的差别**：`allocation_reconcile` 是"曾经以为要存、后来发现不用存"（对账产物是文件）；`allocation_rule`
+是"曾经以为要存、后来发现没实现"（规则注册表从未落地）。删法相同，理由不同，所以各记一条。
+
+**没有做的事**：没有写一个 DB 背书的 `RuleResolver` 来"填满"这张表。那是功能，不是卫生；用一个从没被要求、
+也没人验证过的功能去挽留一张空表，是把"删一张纸面表"的成本转嫁成"维护一个未经验证的规则仓库"。规则进
+数据库的诉求真的出现时，从零写一个带读写的 `RuleResolver` 更便宜，而不是给一张空表打补丁。

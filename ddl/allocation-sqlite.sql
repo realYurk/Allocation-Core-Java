@@ -8,18 +8,6 @@
 --
 -- Foreign keys are enforced per connection in SQLite, so a client must issue PRAGMA foreign_keys = ON.
 
-CREATE TABLE IF NOT EXISTS allocation_rule (
-  rule_code      TEXT    PRIMARY KEY,
-  rule_name      TEXT    NOT NULL,
-  schema_version TEXT    NOT NULL,
-  precision      INTEGER NOT NULL,
-  spec_sha256    TEXT    NOT NULL,
-  spec_json      TEXT    NOT NULL,
-  status         TEXT    NOT NULL DEFAULT 'ACTIVE',
-  create_time    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_rule_sha ON allocation_rule (spec_sha256);
 
 -- tenant_id is '' for a single-tenant deployment, which is why the same statements run everywhere: a
 -- host without tenants writes the default and the composite unique key degenerates into the key on

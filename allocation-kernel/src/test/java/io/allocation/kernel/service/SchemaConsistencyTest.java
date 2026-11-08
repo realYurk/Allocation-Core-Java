@@ -49,7 +49,7 @@ class SchemaConsistencyTest {
         Map<Path, Map<String, List<String>>> schemas = schemas();
 
         Set<String> expected = new TreeSet<>(schemas.get(DIALECTS.get(0)).keySet());
-        assertTrue(expected.containsAll(List.of("allocation_rule", "allocation_run", "allocation_pool",
+        assertTrue(expected.containsAll(List.of("allocation_run", "allocation_pool",
                 "allocation_line", "allocation_result")), "the engine's tables: " + expected);
 
         for (Path dialect : DIALECTS) {

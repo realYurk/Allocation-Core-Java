@@ -8,18 +8,6 @@
 -- The run table is the audit spine. Everything else hangs off run_id and is immutable once the run is
 -- PUBLISHED.
 
-CREATE TABLE IF NOT EXISTS allocation_rule (
-  rule_code      VARCHAR(64)  NOT NULL,
-  rule_name      VARCHAR(128) NOT NULL,
-  schema_version VARCHAR(32)  NOT NULL,
-  precision      TINYINT      NOT NULL,
-  spec_sha256    CHAR(64)     NOT NULL,
-  spec_json      JSON         NOT NULL,
-  status         VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
-  create_time    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (rule_code),
-  KEY idx_rule_sha (spec_sha256)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- tenant_id is '' for a single-tenant deployment, so the same statements run everywhere and the
 -- composite unique key degenerates into the key on idempotency_key that it always was. The child tables

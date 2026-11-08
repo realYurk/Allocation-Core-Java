@@ -294,11 +294,10 @@ DDL 是代码，只保留一份，放在 `ddl/`：
 的是语法、`LIMIT ? OFFSET ?` 的参数绑定、`JSON` 列与 `AUTO_INCREMENT` 在这两个方言上的具体行为。第一次接真库
 时，把 `SchemaTest` 与 `JdbcServiceTest` 的入口换成一个真实 `DataSource` 重跑一遍，再删掉这段话。
 
-五张表：`allocation_rule` / `allocation_run` / `allocation_pool` / `allocation_line` /
-`allocation_result`。对账结果**不落表**：它是 `ReconcileOutcome`（一个计数摘要）和一份
-`differences.csv`，因为对账的产物是一份要给人看、要归档的差异文件，不是一行可查询的状态。曾经有一张
-`allocation_reconcile` 表，没有任何代码写它——一张永远没有行的表比没有这张表更糟，它会让宿主在它上面建报表
-（D-033）。
+四张表：`allocation_run` / `allocation_pool` / `allocation_line` / `allocation_result`。对账结果**不落表**：
+它是 `ReconcileOutcome`（一个计数摘要）和一份 `differences.csv`，因为对账的产物是一份要给人看、要归档的
+差异文件，不是一行可查询的状态。曾经有一张 `allocation_reconcile` 表（D-033）和一张 `allocation_rule` 表
+（D-037），都没有任何代码写它——一张永远没有行的表比没有这张表更糟，它会让宿主在它上面建报表。
 
 `allocation_result` 存的是最终答案（一条终端输出行），`allocation_line` 存的是它怎么来的
 （每条分配决策的权重、分母、份额）。前者供分页查询，后者供 `explain` 与审计。两者都按 `seq` 升序，

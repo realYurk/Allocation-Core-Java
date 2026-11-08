@@ -65,7 +65,7 @@ class SchemaTest {
         }
 
         assertEquals(List.of("allocation_line", "allocation_pool", "allocation_result",
-                "allocation_rule", "allocation_run"), tables);
+                "allocation_run"), tables);
     }
 
     @Test
