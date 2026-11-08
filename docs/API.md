@@ -148,6 +148,9 @@ public record ShareTrace(Money poolAmount, long weight, long denominator, int re
 
 ### 2.4 `GET /allocation/runs/{runId}/result?page=1&size=500`
 
+> **实现说明**：翻页只读本页涉及的账本（先按 `target_key` 取本页的行，再按池取整组以还原余数排名），
+> 内存上界是"页大小 × 池宽度"，与 run 总行数无关（D-026）。`POST .../explain` 同理。
+
 分页返回已发布明细；未 `PUBLISHED` 的 run 返回 `ALLOC_006`。
 
 ### 2.5 `POST /allocation/runs/{runId}/reconcile`

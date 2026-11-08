@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS allocation_line (
 );
 
 CREATE INDEX IF NOT EXISTS idx_line_target ON allocation_line (run_id, target_key);
+-- Reading one pool's ledger group is how a result page explains its ranks without reading the run.
+CREATE INDEX IF NOT EXISTS idx_line_pool ON allocation_line (run_id, stage_id, rule_id, pool_key);
 
 -- Terminal output rows; see the MySQL variant for why coordinate is one JSON key.
 CREATE TABLE IF NOT EXISTS allocation_result (

@@ -33,10 +33,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -284,9 +286,10 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
             throw new AllocationException(ErrorCode.RULE_INVALID, "page and size must be at least 1");
         }
         AllocationSpec spec = specOf(record);
-        Map<String, Decision> decisions = decisions(spec, repository.lines(runId));
+        List<RunSink.ResultLine> rows = repository.results(runId, (page - 1) * size, size);
+        Map<String, Decision> decisions = decisionsFor(spec, runId, rows);
         List<Preview.AllocatedLine> lines = new ArrayList<>();
-        for (RunSink.ResultLine line : repository.results(runId, (page - 1) * size, size)) {
+        for (RunSink.ResultLine line : rows) {
             Decision decision = decisions.get(traceKey(line));
             lines.add(new Preview.AllocatedLine(coord(line, spec.dimensions()), new Money(line.amount(), spec.precision()),
                     decision == null ? null : new Preview.ShareTrace(new Money(decision.line().poolAmount(), spec.precision()),
@@ -314,7 +317,7 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
         }
         String key = new Coord(members).key();
         List<Explain.Step> steps = new ArrayList<>();
-        for (Decision decision : decisions(spec, repository.lines(runId)).values()) {
+        for (Decision decision : decisionsForTargets(spec, runId, Set.of(key)).values()) {
             RunSink.LedgerLine line = decision.line();
             if (!line.target().equals(key)) {
                 continue;
@@ -536,6 +539,49 @@ public final class DefaultAllocationTemplate implements AllocationTemplate, Auto
      * {@link Apportion#settlementOrder} keeps a single copy of the tie-break policy.
      */
     private record Decision(RunSink.LedgerLine line, int rank, boolean gotResidual) {
+    }
+
+    /**
+     * The decisions behind one page of results, read pool by pool instead of run by run.
+     *
+     * <p>This used to read the whole ledger for every page. For the run sizes this engine is built for
+     * that is not slow, it is fatal: a million-row run would materialise a million ledger objects —
+     * hundreds of megabytes — to explain ten lines, on every request.
+     *
+     * <p>Two reads, both bounded. The first fetches the page's own lines, which says which pools are
+     * involved; the second fetches those pools whole, because a target's remainder rank is a property of
+     * its pool and cannot be recomputed from one line. The bound is therefore "page size x targets per
+     * pool", never "size of the run".
+     */
+    private Map<String, Decision> decisionsFor(AllocationSpec spec, String runId, List<RunSink.ResultLine> page) {
+        if (page.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> targets = new LinkedHashSet<>();
+        for (RunSink.ResultLine line : page) {
+            targets.add(line.coord().key());
+        }
+        return decisionsForTargets(spec, runId, targets);
+    }
+
+    private Map<String, Decision> decisionsForTargets(AllocationSpec spec, String runId, Set<String> targets) {
+        List<RunSink.LedgerLine> own = repository.linesForTargets(runId, targets);
+        if (own.isEmpty()) {
+            return Map.of();
+        }
+        Set<PoolRef> pools = new LinkedHashSet<>();
+        for (RunSink.LedgerLine line : own) {
+            pools.add(new PoolRef(line.stage(), line.rule(), line.pool()));
+        }
+        List<RunSink.LedgerLine> whole = new ArrayList<>();
+        for (PoolRef pool : pools) {
+            whole.addAll(repository.linesForPool(runId, pool.stage(), pool.rule(), pool.pool()));
+        }
+        return decisions(spec, whole);
+    }
+
+    /** One pool's ledger group: the unit that has to be read together to rank its targets. */
+    private record PoolRef(String stage, String rule, String pool) {
     }
 
     private static String traceKey(RunSink.ResultLine line) {

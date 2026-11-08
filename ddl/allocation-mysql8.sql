@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS allocation_line (
   allocated_amount BIGINT       NOT NULL,
   PRIMARY KEY (run_id, seq),
   KEY idx_line_target (run_id, target_key(255)),
+  -- Reading one pool's ledger group is how a result page explains its ranks without reading the run.
+  KEY idx_line_pool (run_id, stage_id, rule_id, pool_key(191)),
   CONSTRAINT fk_line_run FOREIGN KEY (run_id) REFERENCES allocation_run (run_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

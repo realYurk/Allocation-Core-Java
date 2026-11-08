@@ -147,6 +147,46 @@ public interface RunRepository {
 
     List<RunSink.LedgerLine> lines(String runId);
 
+    /**
+     * The ledger lines of a few target coordinates, in write order.
+     *
+     * <p>Exists because a result page needs the decision behind at most {@code size} coordinates, and
+     * reading the whole ledger to answer that is a memory limit disguised as a query: a million-row run
+     * would materialise a million objects to serve ten lines. The default implementation filters
+     * {@link #lines(String)}, which is correct and still loads everything, so an implementation that cares
+     * should override it with an indexed query.
+     */
+    default List<RunSink.LedgerLine> linesForTargets(String runId, java.util.Collection<String> targetKeys) {
+        if (targetKeys == null || targetKeys.isEmpty()) {
+            return List.of();
+        }
+        java.util.Set<String> wanted = new java.util.HashSet<>(targetKeys);
+        List<RunSink.LedgerLine> out = new java.util.ArrayList<>();
+        for (RunSink.LedgerLine line : lines(runId)) {
+            if (wanted.contains(line.target())) {
+                out.add(line);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Every ledger line of one pool — all of its targets, in write order.
+     *
+     * <p>Separate from {@link #linesForTargets} because a target's own line cannot explain itself: its
+     * remainder rank is a property of the whole pool. Reading the pool is what makes an explanation exact
+     * without reading the run.
+     */
+    default List<RunSink.LedgerLine> linesForPool(String runId, String stageId, String ruleId, String poolKey) {
+        List<RunSink.LedgerLine> out = new java.util.ArrayList<>();
+        for (RunSink.LedgerLine line : lines(runId)) {
+            if (line.stage().equals(stageId) && line.rule().equals(ruleId) && line.pool().equals(poolKey)) {
+                out.add(line);
+            }
+        }
+        return out;
+    }
+
     /** Paged results; {@code offset} is zero based. */
     List<RunSink.ResultLine> results(String runId, int offset, int limit);
 

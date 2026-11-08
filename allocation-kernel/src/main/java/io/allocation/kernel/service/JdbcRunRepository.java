@@ -12,6 +12,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 
@@ -91,13 +93,23 @@ public final class JdbcRunRepository implements RunRepository {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
-    private static final String SELECT_LINE = """
+    private static final String SELECT_LINE_COLUMNS = """
             SELECT stage_id, rule_id, pool_key, target_key, target_row_id, pool_amount, share_amount,
                    weight, denominator, allocated_amount
               FROM allocation_line
              WHERE run_id = ?
-             ORDER BY seq
             """;
+
+    private static final String SELECT_LINE = SELECT_LINE_COLUMNS + " ORDER BY seq\n";
+
+    private static final String SELECT_LINE_BY_TARGET =
+            SELECT_LINE_COLUMNS + "   AND target_key IN (%s)\n ORDER BY seq\n";
+
+    private static final String SELECT_LINE_BY_POOL = SELECT_LINE_COLUMNS
+            + "   AND stage_id = ? AND rule_id = ? AND pool_key = ?\n ORDER BY seq\n";
+
+    /** Bound on the IN list, well under every driver's parameter limit and small enough to stay cached. */
+    private static final int TARGET_KEYS_PER_QUERY = 400;
 
     private static final String INSERT_RESULT = """
             INSERT INTO allocation_result (run_id, seq, stage_id, row_id, coordinate, amount)
@@ -579,6 +591,64 @@ public final class JdbcRunRepository implements RunRepository {
             }
         } catch (SQLException e) {
             throw translate("read ledger evidence", e);
+        }
+    }
+
+    /**
+     * Reads only the ledger lines of the given coordinates.
+     *
+     * <p>Chunked rather than one statement with a thousand placeholders: the IN list of a 500-row page is
+     * 500 parameters, which is legal on MySQL and PostgreSQL but starts to defeat statement caching, and
+     * the chunk size is a number this class can defend.
+     */
+    @Override
+    public List<RunSink.LedgerLine> linesForTargets(String runId, Collection<String> targetKeys) {
+        if (targetKeys == null || targetKeys.isEmpty()) {
+            return List.of();
+        }
+        List<String> keys = new ArrayList<>(new LinkedHashSet<>(targetKeys));
+        List<RunSink.LedgerLine> out = new ArrayList<>();
+        try (Connection connection = dataSource.getConnection()) {
+            for (int start = 0; start < keys.size(); start += TARGET_KEYS_PER_QUERY) {
+                List<String> chunk = keys.subList(start, Math.min(keys.size(), start + TARGET_KEYS_PER_QUERY));
+                String sql = SELECT_LINE_BY_TARGET.formatted("?,".repeat(chunk.size() - 1) + "?");
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    statement.setString(1, runId);
+                    for (int i = 0; i < chunk.size(); i++) {
+                        statement.setString(2 + i, chunk.get(i));
+                    }
+                    readLines(statement, out);
+                }
+            }
+            return out;
+        } catch (SQLException e) {
+            throw translate("read ledger evidence for targets", e);
+        }
+    }
+
+    @Override
+    public List<RunSink.LedgerLine> linesForPool(String runId, String stageId, String ruleId, String poolKey) {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(SELECT_LINE_BY_POOL)) {
+            statement.setString(1, runId);
+            statement.setString(2, stageId);
+            statement.setString(3, ruleId);
+            statement.setString(4, poolKey);
+            List<RunSink.LedgerLine> out = new ArrayList<>();
+            readLines(statement, out);
+            return out;
+        } catch (SQLException e) {
+            throw translate("read ledger evidence for a pool", e);
+        }
+    }
+
+    private static void readLines(PreparedStatement statement, List<RunSink.LedgerLine> into) throws SQLException {
+        try (ResultSet rs = statement.executeQuery()) {
+            while (rs.next()) {
+                into.add(new RunSink.LedgerLine(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getLong(6), rs.getLong(7), rs.getLong(8),
+                        rs.getLong(9), rs.getLong(10)));
+            }
         }
     }
 
